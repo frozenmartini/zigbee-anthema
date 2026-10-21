@@ -11,7 +11,7 @@ jobs:
   draft:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Tag must match the firmware version
         env:
@@ -39,6 +39,10 @@ jobs:
           esp_idf_version: v5.5.5
           target: esp32c6
           path: bulb
+
+      - uses: actions/setup-python@v6   # the runner's own Python refuses a system-wide pip install (PEP 668)
+        with:
+          python-version: '3.12'
 
       - name: Assemble the release files
         run: |
