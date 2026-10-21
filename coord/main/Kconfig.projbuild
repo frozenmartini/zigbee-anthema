@@ -1,0 +1,26 @@
+menu "c6 coord (bench Zigbee coordinator)"
+
+config C6_ZB_CHANNEL
+    int "Channel the bench network is formed on"
+    range 11 26
+    default 25
+    help
+        Not 11: clear of channel 11, where many Zigbee2MQTT and other Zigbee networks sit.
+
+config C6_ZB_EXT_PANID
+    string "Extended PAN ID (16 hex, MSB first)"
+    default "0000000000000001"
+
+config C6_ZB_REQUIRE_IC
+    bool "Admit only joiners whose install code is held (the secured path of a real Zigbee controller)"
+    default y
+
+config C6_ZB_JOINER_EUI64
+    string "Joiner whose install code is held (16 hex, MSB first)"
+    default ""
+
+config C6_ZB_JOINER_IC
+    string "That joiner's 128-bit install code + CRC (36 hex)"
+    default ""
+
+endmenu

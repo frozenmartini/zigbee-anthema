@@ -1,0 +1,136 @@
+menu "c6 bulb (Zigbee end device)"
+
+config C6_ZB_CHANNEL_MASK
+    hex "Channels it may scan and join"
+    default 0x07FFF800
+    help
+        Bit n = channel n. The default is every channel, 11-26 (0x07FFF800, 0.5.0): a Zigbee controller may run
+        on any of them. Both the primary and the secondary channel set are this mask. A board that
+        has a network rejoins on its stored channel without scanning. What keeps a board off
+        another network is the ext_pan setting (PUT /api/v1/settings), not this mask.
+
+config C6_ZB_RX_WATCHDOG_S
+    int "Default for the rx_wd_s setting: reboot after this many seconds without receiving anything"
+    default 0
+    help
+        Used only while the rx_wd_s setting is not stored (GET/PUT /api/v1/settings, 0.4.0); the
+        setting is 0 (off) or 30-3600 and is read on every watchdog pass. The Zigbee controller acknowledges the
+        On/Off report every 20 s. Armed only after the first frame since boot; doubles with each
+        consecutive stall reboot, back to the setting after 30 healthy minutes. 0 = off, the default:
+        a board whose group the Zigbee controller never acknowledges would reboot for nothing.
+
+config C6_ZB_EXT_PANID
+    string "Only join this extended PAN ID (16 hex, MSB first); empty = any"
+    default ""
+    help
+        The default for the ext_pan setting (0.5.0); empty in a public build. Used only while the
+        setting is not stored; a stored empty ext_pan joins any network. Read when the stack starts,
+        so a change takes effect at the next reboot or POST /api/v1/zigbee/erase.
+
+config C6_ZB_INSTALL_CODE
+    string "128-bit install code + CRC, 36 hex digits; empty = join on the default TC link key"
+    default ""
+
+choice C6_ZB_PROFILE
+    prompt "What the bulb presents"
+    default C6_ZB_PROFILE_ESPRESSIF
+
+config C6_ZB_PROFILE_ESPRESSIF
+    bool "Espressif ZHA colour dimmable light, identity strings from below"
+
+config C6_ZB_PROFILE_SENGLED_E11
+    bool "Sengled E11-N1EA clone (colour, HA 1.2), every value read off the real bulb"
+
+endchoice
+
+config C6_ZB_E11_DEVICE_ID
+    hex "E11 profile: endpoint device id"
+    depends on C6_ZB_PROFILE_SENGLED_E11
+    default 0x0102
+    help
+        0x0102 Color Dimmable Light is what the real E11-N1EA says. 0x0101 Dimmable Light is
+        what the Z01-A19NAE26 and the E21-N13A say. Changing it is an experiment: which of the
+        two the tested Zigbee controller's multicolor flag follows.
+
+config C6_ZB_REPORT_LEVEL_CT
+    int "Also send the Zigbee controller unsolicited Level and CT reports after POST /zb/light (1 = on)"
+    default 0
+    help
+        The tested Zigbee controller ignores them for its LIGHT_STS, and once flipped a group OFF after a CT report.
+        Kept for experiments.
+
+config C6_ZB_REPORT_DST_EP
+    int "Endpoint on the Zigbee controller's coordinator that the experimental Level/CT reports go to"
+    range 1 240
+    default 2
+    help
+        Only used with C6_ZB_REPORT_LEVEL_CT. 1 until 0.3.23; the boards' On/Off bindings point at
+        endpoint 2 since they were re-paired.
+
+config C6_BUTTON_SETTLE_MS
+    int "Default for the settle_ms setting: shortcut Zigbee controller quiet time before a press is pushed (ms)"
+    default 2000
+    help
+        Used only while the settle_ms setting is not stored (GET/PUT /api/v1/settings, 0.4.0; the
+        setting is 200-10000). The role (none, mirror, shortcut) and the webhook URL are settings
+        too, no longer options. A preset can be several frames (On, Level, colour); this makes it
+        one press. A colour chosen as the On came 1.41 s after it, so 1000
+        split it in two.
+
+config C6_BUTTON_REARM_MS
+    int "Default for the rearm_ms setting: an On this soon after a release is released (ms)"
+    default 3000
+    help
+        Used only while the rearm_ms setting is not stored (0.4.0; the setting is 0-30000). A
+        brightness change on the light page 0.1 s after the client's Off became a second press.
+
+config C6_BUTTON_OFF_AFTER_S
+    int "Default for the off_after_s setting: shortcut self-release timeout (s); 0 = never"
+    default 0
+    help
+        0 = never: a press stays held until the client releases it (mode 1, a button) or the
+        touchscreen turns it off (mode 2, a switch). Set 10-3600 only as a backstop for an
+        automation that may never release. Used while the setting is not
+        stored (0.4.0; the setting is 0 or 10-3600; default 0 since 0.6.0). A timeout release is
+        pushed as {"release":N,"by":"timeout"} so the client's switch follows.
+
+config C6_ZB_IEEE
+    string "IEEE address override (16 hex, MSB first); empty = the chip's own, or derived from the MAC (E11)"
+    default ""
+    help
+        Empty, Espressif profile (0.7.0): the chip's own IEEE 802.15.4 address (ESP_MAC_IEEE802154,
+        the base MAC's first three bytes, FF FE, then its last three). Empty, E11 profile (0.4.0):
+        B0CE18C600 followed by the last three bytes of the chip's base MAC: a base MAC of
+        AA:BB:CC:11:22:33 gives B0CE18C600112233 (the Espressif profile would give AABBCCFFFE112233).
+        Set it only to override; never change the address a paired board uses.
+
+config C6_ZB_ENDPOINT
+    int "Light endpoint"
+    default 1
+
+config C6_ZB_MANUFACTURER
+    string "Basic cluster ManufacturerName"
+    default "Zigbee Anthema"
+    help
+        At most 32 characters (a ZCL string); more stops the build.
+
+config C6_ZB_MODEL
+    string "Basic cluster ModelIdentifier"
+    default "zigbee-anthema"
+    help
+        At most 32 characters (a ZCL string); more stops the build.
+
+config C6_ZB_MANUF_CODE
+    hex "Node descriptor manufacturer code"
+    default 0x131B
+    help
+        0x131B is Espressif's. Sengled's is 0x1160 (the clone in the Zigbee controller trial).
+
+config C6_ZB_KEY_ENDPOINT
+    bool "GET /zb/key: the network key, for decrypting a sniffer's captures (token)"
+    default n
+    help
+        Serves the network key to the holder of the token, for reading a sniffer's captures of the
+        network. Off by default: turn it on only on a bench board.
+
+endmenu

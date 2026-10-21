@@ -1,0 +1,5 @@
+dependencies:
+  idf:
+    version: ">=5.5"
+  # pinned: the API and the plan were read against 2.0.4 (esp-zigbee-sdk 7b9a2e0)
+  espressif/esp-zigbee-lib: "==2.0.4"

@@ -1,0 +1,105 @@
+menu "c6 base (Wi-Fi, OTA, logs, claim)"
+
+config C6_WIFI_SSID
+    string "Wi-Fi SSID"
+    default ""
+    help
+        Used once, when nothing is stored (0.5.0); empty in a public build.
+        Leave empty in a public build; set it in your own sdkconfig.
+
+config C6_WIFI_PASS
+    string "Wi-Fi password"
+    default ""
+    help
+        Used once, when nothing is stored (0.5.0); empty in a public build.
+        Leave empty in a public build; set it in your own sdkconfig.
+
+config C6_OTA_TOKEN
+    string "Developer credential (X-OTA-Token)"
+    default ""
+    help
+        The developer credential, also accepted by the claim-protected endpoints while set;
+        empty in a public build. 16 to 79 characters, or every X-OTA-Token value is refused
+        (more than 79 stops the build).
+        Leave empty in a public build; set it in your own sdkconfig.
+
+config C6_LED_GPIO
+    int "Blue LED GPIO (held off)"
+    default 7
+    help
+        The M5Stack NanoC6's blue LED. It is configured as an output and held off; every LED
+        pattern is on the colour LED (C6_RGB_GPIO).
+
+config C6_RGB_GPIO
+    int "Colour LED (WS2812) data GPIO"
+    default 20
+    help
+        The data line of the M5Stack NanoC6's colour LED, a WS2812 driven through the RMT.
+        It shows the button's hold cues, the setup hotspot, an unclaimed board and /identify.
+
+config C6_RGB_PWR_GPIO
+    int "Colour LED power GPIO"
+    default 19
+    help
+        The GPIO that switches the colour LED's power on the M5Stack NanoC6. Driven high at
+        start.
+
+config C6_RGB_LEVEL
+    int "Colour LED brightness (0-255)"
+    range 0 255
+    default 40
+    help
+        Every colour the colour LED shows, the one /identify is given included, is scaled by
+        this over 255. 0 keeps the LED dark.
+
+config C6_BUTTON_GPIO
+    int "Button GPIO (active low)"
+    default 9
+    help
+        The M5Stack NanoC6's button. A press opens the claim window for 10 minutes, a 3-9 s hold
+        opens the setup hotspot for 10 minutes, a 10 s hold clears the claim.
+
+config C6_AP_SSID_PREFIX
+    string "Setup hotspot SSID prefix"
+    default "Zigbee-Anthema-"
+    help
+        The hotspot's SSID is this followed by the board's six-hex serial.
+
+config C6_WIFI_FAIL_S
+    int "Seconds without an IP before the hotspot opens"
+    default 60
+    help
+        Seconds without an IP before the hotspot opens, counted from boot and from every new
+        Wi-Fi setting.
+
+config C6_VERIFY_TIMEOUT_S
+    int "Seconds a new OTA image has to bring up Wi-Fi and HTTP before it is rolled back"
+    default 120
+
+config C6_WIFI_START_DELAY_MS
+    int "Delay before Wi-Fi starts (diagnostic; 0 = at once)"
+    default 0
+    help
+        Keep it well under C6_VERIFY_TIMEOUT_S, or a new image rolls back before Wi-Fi is up.
+
+config C6_VERIFY_STABLE_S
+    int "Seconds a new OTA image must then run without a reset before it is marked valid"
+    default 60
+
+config C6_VERIFY_ZIGBEE_S
+    int "Seconds from boot a new OTA image has to get Zigbee back before it is rolled back"
+    default 600
+    help
+        Seconds from boot a new image has to get Zigbee back (joined, or factory new) before it is
+        rolled back, when the image asks for the check (c6_app_verify_zigbee). The default is
+        10 minutes; a rejoin after an update takes 20 s to 3 min, once 24 min.
+
+config C6_VERIFY_BREAK_TEST
+    bool "Rollback test: never count Zigbee as back"
+    default n
+    help
+        Rollback test only: c6_base_zigbee_ready() sets nothing, so a build with this on rolls back
+        after C6_VERIFY_ZIGBEE_S with Wi-Fi, HTTP and Zigbee all up. Never in a release build;
+        sdkconfig.defaults keeps it off.
+
+endmenu

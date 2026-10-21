@@ -1,0 +1,1 @@
+idf_component_register(SRCS "bulb.c" "api/v1/settings.c" "api/v1/state.c" "api/v1/events.c" "api/v1/light.c" INCLUDE_DIRS "." PRIV_REQUIRES c6_base c6_zb esp_hw_support nvs_flash esp_system esp_timer esp_http_client json http_parser)

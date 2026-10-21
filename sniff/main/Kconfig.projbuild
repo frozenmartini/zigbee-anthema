@@ -1,0 +1,10 @@
+menu "c6 sniff (receive-only 802.15.4 capture)"
+
+config C6_SNIFF_CHANNEL
+    int "Channel to listen on"
+    range 11 26
+    default 25
+    help
+        25: clear of channel 11, where many Zigbee controllers and Zigbee2MQTT networks sit. Set it to the Zigbee controller's channel.
+
+endmenu

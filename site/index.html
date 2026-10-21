@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Install Zigbee Anthema</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; line-height: 1.5; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; color: #1b1b1b; background: #fff; }
+    h1 { margin-bottom: 0.25rem; }
+    .lead { margin-top: 0; color: #444; }
+    .install { margin: 1.5rem 0; padding: 1rem; border: 1px solid #ccc; border-radius: 8px; text-align: center; }
+    button { font: inherit; padding: 0.6rem 1.4rem; border: 0; border-radius: 6px; background: #0b57d0; color: #fff; cursor: pointer; }
+    .warn { padding: 0.75rem 1rem; border-left: 4px solid #b26a00; background: #fff6e5; }
+    li { margin-bottom: 0.6rem; }
+    code { background: #f1f1f1; padding: 0 0.25rem; border-radius: 3px; }
+    footer { margin-top: 2rem; font-size: 0.9rem; color: #444; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #121212; color: #e6e6e6; }
+      .lead, footer { color: #bbb; }
+      .install { border-color: #444; }
+      .warn { background: #2b2210; border-left-color: #e0a030; }
+      code { background: #2a2a2a; }
+      a { color: #8ab4f8; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Install Zigbee Anthema</h1>
+  <p class="lead">A virtual Zigbee light that bridges to HTTP, on an ESP32-C6 board. This page puts the firmware on a board from your browser, over USB.</p>
+
+  <div class="install">
+    <esp-web-install-button manifest="manifest.json">
+      <button slot="activate" type="button">Install</button>
+      <span slot="unsupported">This browser cannot install firmware. Use Chrome or Edge on a Windows, Mac or Linux computer. iPhone, iPad and Safari are not supported.</span>
+      <span slot="not-allowed">This page must be opened over https to install. Open the https address of this page.</span>
+    </esp-web-install-button>
+  </div>
+
+  <div class="warn">
+    <strong>New board only.</strong> This installs the complete firmware, including the area where a board keeps its Zigbee pairing and Wi-Fi details, and that area is overwritten even when you choose to keep your settings. To update a board that is already paired, use its own update instead (see <a href="https://github.com/frozenmartini/zigbee-anthema/blob/main/docs/install.md">docs/install.md</a>), not this button.
+  </div>
+
+  <h2>The six steps</h2>
+  <ol>
+    <li><strong>What you need.</strong> An ESP32-C6 board, a USB-C cable that carries <em>data</em> (many cables carry power only, and that is the most common failure), and Chrome or Edge on a computer.</li>
+    <li><strong>Install and pick the port.</strong> Plug the board in, click <strong>Install</strong> above, and choose the board's serial port from the list. A first install erases the whole board, which is right for a new one.</li>
+    <li><strong>Nothing shows in the list?</strong> Change the cable first. If it still does not appear, hold the board's button while you click Install, or while you plug it in, and try again.</li>
+    <li><strong>The Wi-Fi box.</strong> When the flash finishes, this page asks for your Wi-Fi name and password and sends them to the board over the cable (Improv). It then shows the board's address on your network.</li>
+    <li><strong>Pair it to your coordinator.</strong> The board is a Zigbee end device. Put your Zigbee controller into pairing mode and let the new light join.</li>
+    <li><strong>Connect your client.</strong> Point your client at the board's address and its HTTP API. The details are in the repository's documents.</li>
+  </ol>
+
+  <h2>About the Wi-Fi step</h2>
+  <p>Improv is a standard way to send Wi-Fi details to a device over USB. It is part of this firmware, so after the flash the same page can ask for the network name and password, hand them to the board, and show the address the board received. Nothing is sent anywhere except to the board over your cable.</p>
+
+  <footer>
+    <p>Source, documentation and releases: <a href="https://github.com/frozenmartini/zigbee-anthema">github.com/frozenmartini/zigbee-anthema</a>
+    &middot; <a href="https://github.com/frozenmartini/zigbee-anthema/blob/main/README.md">README</a>
+    &middot; <a href="https://github.com/frozenmartini/zigbee-anthema/blob/main/docs/install.md">Install guide</a></p>
+  </footer>
+</body>
+</html>

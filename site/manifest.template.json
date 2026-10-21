@@ -1,0 +1,16 @@
+{
+  "name": "Zigbee Anthema",
+  "version": "<ver>",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-C6",
+      "parts": [
+        {
+          "path": "firmware/zigbee-anthema-<ver>-factory.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

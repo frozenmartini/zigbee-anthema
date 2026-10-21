@@ -1,0 +1,44 @@
+name: pages
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the published release's install files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p site/firmware
+          gh release download "$TAG" --repo "$REPO" --pattern 'zigbee-anthema-*-factory.bin' --dir site/firmware
+          gh release download "$TAG" --repo "$REPO" --pattern 'manifest.json' --dir site
+          rm -f site/manifest.template.json
+          ls -l site site/firmware
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
