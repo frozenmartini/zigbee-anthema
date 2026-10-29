@@ -2,15 +2,11 @@
  * settings — the board's settings, stored in NVS and changed live over HTTP (0.4.0).
  *
  * One c6_bulb binary serves every board: what used to be the button-mode option, the Kconfig webhook
- * URL and the button and watchdog constants are now these settings, in NVS namespace "c6cfg" of the
+ * URL and the watchdog constant are now these settings, in NVS namespace "c6cfg" of the
  * existing "nvs" partition:
  *
  *   role         u8   0 none, 1 mirror, 2 shortcut                      default 0 none
  *   webhook      str  the webhook URL; empty: no pushes   default empty
- *   settle_ms    u32  shortcut: Zigbee controller quiet time before a press is pushed  default CONFIG_C6_BUTTON_SETTLE_MS
- *   rearm_ms     u32  shortcut: an On this soon after a release is not a press   CONFIG_C6_BUTTON_REARM_MS
- *   off_after_s  u32  shortcut: self-release timeout; 0: never         default CONFIG_C6_BUTTON_OFF_AFTER_S
- *                                                                       (default 0 since 0.6.0)
  *   rx_wd_s      u32  RX-silence watchdog; 0: off                      default CONFIG_C6_ZB_RX_WATCHDOG_S
  *   ext_pan      str  the only extended PAN ID to join, 16 hex MSB first; empty: any network
  *                                                                       default CONFIG_C6_ZB_EXT_PANID
@@ -35,7 +31,7 @@
  * Read once at boot (cfg_load) into cfg_live, which bulb.c's s_light_mux guards. An absent key is not an
  * error: its default applies, and GET shows which keys are stored.
  *
- *   GET /api/v1/settings   {"role":..,"webhook":"<masked>","settle_ms":..,..,"hue":true,"stored":[..]} (token;
+ *   GET /api/v1/settings   {"role":..,"webhook":"<masked>","rx_wd_s":..,..,"hue":true,"stored":[..]} (token;
  *                          the state object's "settings" is the same JSON without "stored", cfg_json_add)
  *   PUT /api/v1/settings   a JSON body of at most 512 bytes with any of the keys above (token). Every
  *                          key is validated before anything is written: all or nothing. "webhook":"-"
@@ -70,7 +66,7 @@ static const char *TAG = "cfg";
 
 /* Indexed by the bit number of CFG_K_*; also the NVS key and the JSON key. */
 static const char *const CFG_KEY_NAMES[CFG_K_COUNT] = {
-    "role", "webhook", "settle_ms", "rearm_ms", "off_after_s", "rx_wd_s", "ext_pan", "name", "hue",
+    "role", "webhook", "rx_wd_s", "ext_pan", "name", "hue",
 };
 
 /* The default ext_pan is copied into cfg_t.ext_pan[17] as it is: empty or 16 characters (its digits are
@@ -78,7 +74,7 @@ static const char *const CFG_KEY_NAMES[CFG_K_COUNT] = {
 _Static_assert(sizeof(CONFIG_C6_ZB_EXT_PANID) == 1 || sizeof(CONFIG_C6_ZB_EXT_PANID) == 17,
                "CONFIG_C6_ZB_EXT_PANID: empty or 16 hex digits");
 
-/* The four numbers: where each lives in cfg_t, its default, and its valid range. zero_ok: 0 is allowed
+/* The one number: where it lives in cfg_t, its default, and its valid range. zero_ok: 0 is allowed
  * below lo (off / never). */
 static const struct {
     const char *key;
@@ -88,12 +84,6 @@ static const struct {
     bool zero_ok;
     const char *range;
 } CFG_NUMS[] = {
-    {"settle_ms",   CFG_K_SETTLE_MS,   offsetof(cfg_t, settle_ms),   (uint32_t)CONFIG_C6_BUTTON_SETTLE_MS,
-     200, 10000, false, "200-10000"},
-    {"rearm_ms",    CFG_K_REARM_MS,    offsetof(cfg_t, rearm_ms),    (uint32_t)CONFIG_C6_BUTTON_REARM_MS,
-     0, 30000, true, "0-30000"},
-    {"off_after_s", CFG_K_OFF_AFTER_S, offsetof(cfg_t, off_after_s), (uint32_t)CONFIG_C6_BUTTON_OFF_AFTER_S,
-     10, 3600, true, "0 or 10-3600"},
     {"rx_wd_s",     CFG_K_RX_WD_S,     offsetof(cfg_t, rx_wd_s),     (uint32_t)CONFIG_C6_ZB_RX_WATCHDOG_S,
      30, 3600, true, "0 or 30-3600"},
 };
@@ -101,9 +91,6 @@ static const struct {
 
 cfg_t cfg_live = {
     .role = CFG_ROLE_NONE,
-    .settle_ms = (uint32_t)CONFIG_C6_BUTTON_SETTLE_MS,
-    .rearm_ms = (uint32_t)CONFIG_C6_BUTTON_REARM_MS,
-    .off_after_s = (uint32_t)CONFIG_C6_BUTTON_OFF_AFTER_S,
     .rx_wd_s = (uint32_t)CONFIG_C6_ZB_RX_WATCHDOG_S,
     .ext_pan = CONFIG_C6_ZB_EXT_PANID,
     .hue = true,
@@ -506,10 +493,8 @@ void cfg_load(void)
     cfg_key_list(c.stored, st, sizeof st);
     cfg_key_list(((1u << CFG_K_COUNT) - 1) & ~c.stored, df, sizeof df);
     ESP_LOGI(TAG, "CFG stored: %s; defaulted: %s", st, df);
-    ESP_LOGI(TAG, "CFG role %s, webhook %s, settle_ms %lu, rearm_ms %lu, off_after_s %lu, rx_wd_s %lu, "
-             "ext_pan %s, hue %s",
-             cfg_role_name(c.role), c.webhook[0] ? "set" : "none", (unsigned long)c.settle_ms,
-             (unsigned long)c.rearm_ms, (unsigned long)c.off_after_s,
+    ESP_LOGI(TAG, "CFG role %s, webhook %s, rx_wd_s %lu, ext_pan %s, hue %s",
+             cfg_role_name(c.role), c.webhook[0] ? "set" : "none",
              (unsigned long)c.rx_wd_s, c.ext_pan[0] ? c.ext_pan : "any", c.hue ? "on" : "off");
     ESP_LOGI(TAG, "CFG name \"%s\"", c.name);
 }
@@ -681,7 +666,6 @@ void cfg_publish_locked(const cfg_t *next, uint32_t keys)
         cfg_live.hue = next->hue;
     }
     cfg_live.stored |= keys;
-    bulb_settings_changed_locked(keys);
     state_mark(ST_SETTINGS);
 }
 
@@ -852,7 +836,6 @@ esp_err_t settings_put(httpd_req_t *req)
         snprintf(err, sizeof err, "NVS write failed: %s", esp_err_to_name(e));
         return c6_json_error(req, 500, "storage", err);
     }
-    bulb_settings_changed();
     cfg_log_changes(&cur, &next, keys);
     if ((keys & CFG_K_ROLE) && next.role != cur.role) {
         c6_discovery_update();                    /* the TXT role: here, after the mux, never inside it */

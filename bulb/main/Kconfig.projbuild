@@ -67,33 +67,6 @@ config C6_ZB_REPORT_DST_EP
         Only used with C6_ZB_REPORT_LEVEL_CT. 1 until 0.3.23; the boards' On/Off bindings point at
         endpoint 2 since they were re-paired.
 
-config C6_BUTTON_SETTLE_MS
-    int "Default for the settle_ms setting: shortcut Zigbee controller quiet time before a press is pushed (ms)"
-    default 2000
-    help
-        Used only while the settle_ms setting is not stored (GET/PUT /api/v1/settings, 0.4.0; the
-        setting is 200-10000). The role (none, mirror, shortcut) and the webhook URL are settings
-        too, no longer options. A preset can be several frames (On, Level, colour); this makes it
-        one press. A colour chosen as the On came 1.41 s after it, so 1000
-        split it in two.
-
-config C6_BUTTON_REARM_MS
-    int "Default for the rearm_ms setting: an On this soon after a release is released (ms)"
-    default 3000
-    help
-        Used only while the rearm_ms setting is not stored (0.4.0; the setting is 0-30000). A
-        brightness change on the light page 0.1 s after the client's Off became a second press.
-
-config C6_BUTTON_OFF_AFTER_S
-    int "Default for the off_after_s setting: shortcut self-release timeout (s); 0 = never"
-    default 0
-    help
-        0 = never: a press stays held until the client releases it (mode 1, a button) or the
-        touchscreen turns it off (mode 2, a switch). Set 10-3600 only as a backstop for an
-        automation that may never release. Used while the setting is not
-        stored (0.4.0; the setting is 0 or 10-3600; default 0 since 0.6.0). A timeout release is
-        pushed as {"release":N,"by":"timeout"} so the client's switch follows.
-
 config C6_ZB_IEEE
     string "IEEE address override (16 hex, MSB first); empty = the chip's own, or derived from the MAC (E11)"
     default ""

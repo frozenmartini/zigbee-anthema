@@ -6,8 +6,7 @@ import http.server, json, os, re, subprocess, sys, tempfile, threading, time
 
 TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "cfg_push.py")
 TOKEN = "dummy-token-0123456789abcdef"
-SETTINGS = {"role": "none", "webhook": "", "settle_ms": 2000, "rearm_ms": 3000,
-            "off_after_s": 120, "rx_wd_s": 0, "stored": []}
+SETTINGS = {"role": "none", "webhook": "", "rx_wd_s": 0, "stored": []}
 seen = []            # (method, path, token header, content type, body bytes)
 accepts = []         # the Accept header of each request, same order as seen
 auths = []           # the Authorization header of each request, same order as seen
@@ -49,8 +48,8 @@ class Board(http.server.BaseHTTPRequestHandler):
         if self.command == "GET":
             return self.reply(200, SETTINGS)
         req = json.loads(body)
-        if req.get("settle_ms") == 5:
-            return self.reply(400, {"error": "bad_request", "message": "settle_ms out of range"})
+        if req.get("rx_wd_s") == 5:
+            return self.reply(400, {"error": "bad_request", "message": "rx_wd_s out of range"})
         if "ext_pan" in req and not (isinstance(req["ext_pan"], str) and re.fullmatch(r"[0-9a-f]{16}|", req["ext_pan"])):
             return self.reply(400, {"error": "bad_request", "message": "ext_pan: 16 hex digits"})
         if "hue" in req and not isinstance(req["hue"], bool):
@@ -154,15 +153,15 @@ check("GET is a GET to /api/v1/settings with the token, no body",
       seen == [("GET", "/api/v1/settings", TOKEN, None, b"")])
 check("GET sends the same token as Authorization: Bearer too", auths == BEARER)
 
-# PUT, numbers as numbers, role as a string
-rc, out, err = run(host, ["role=shortcut", "settle_ms=2500", "off_after_s=0", "rx_wd_s=60"], good)
+# PUT, numbers as numbers (a zero too: 0 is rx_wd_s's "off"), role as a string
+rc, out, err = run(host, ["role=shortcut", "rx_wd_s=0"], good)
 check("PUT exits 0", rc == 0)
 m, path, tok, ctype, body = seen[0]
 check("PUT is a PUT to /api/v1/settings with the token and a JSON content type",
       (m, path, tok, ctype) == ("PUT", "/api/v1/settings", TOKEN, "application/json"))
 check("PUT sends the same token as Authorization: Bearer too", auths == BEARER)
-check("PUT body: numbers as numbers, role as a string",
-      json.loads(body) == {"role": "shortcut", "settle_ms": 2500, "off_after_s": 0, "rx_wd_s": 60})
+check("PUT body: numbers as numbers (0 as the number 0), role as a string",
+      json.loads(body) == {"role": "shortcut", "rx_wd_s": 0} and type(json.loads(body)["rx_wd_s"]) is int)
 check("PUT prints the response body", json.loads(out)["role"] == "shortcut")
 
 # PUT, webhook from stdin
@@ -230,29 +229,29 @@ for word, want in (("true", True), ("false", False)):
     check(f"hue={word} is sent as the JSON boolean {word}",
           rc == 0 and len(seen) == 1 and json.loads(seen[0][4]) == {"hue": want} and json.loads(seen[0][4])["hue"] is want)
     check(f"hue={word}: the answer lists hue as pending", json.loads(out)["pending"] == ["hue"] and json.loads(out)["hue"] is want)
-rc, out, err = run(host, ["ext_pan=0123456789abcdef", "hue=false", "settle_ms=2500"], good)
+rc, out, err = run(host, ["ext_pan=0123456789abcdef", "hue=false", "rx_wd_s=60"], good)
 check("hue beside other keys: boolean next to string and number; pending lists ext_pan and hue",
-      rc == 0 and json.loads(seen[0][4]) == {"ext_pan": "0123456789abcdef", "hue": False, "settle_ms": 2500} and json.loads(out)["pending"] == ["ext_pan", "hue"])
+      rc == 0 and json.loads(seen[0][4]) == {"ext_pan": "0123456789abcdef", "hue": False, "rx_wd_s": 60} and json.loads(out)["pending"] == ["ext_pan", "hue"])
 for bad in ("2", "1", "0", "on", "True", "TRUE", "yes", ""):
     rc, out, err = run(host, ["hue=" + bad], good)
     check(f"hue={bad!r} is refused before any request ('hue takes true or false')",
           rc != 0 and not seen and out == "" and "hue takes true or false" in err)
 
 # a 400 error JSON is echoed so the operator sees the refused key
-rc, out, err = run(host, ["settle_ms=5"], good)
+rc, out, err = run(host, ["rx_wd_s=5"], good)
 check("400: exit 1", rc == 1)
 check("400: the board's error JSON is printed, naming the key",
-      "HTTP 400" in err and "settle_ms out of range" in err and out == "")
+      "HTTP 400" in err and "rx_wd_s out of range" in err and out == "")
 
 # malformed argument
-rc, out, err = run(host, ["settle_ms"], good)
+rc, out, err = run(host, ["rx_wd_s"], good)
 check("an argument without '=' is refused, nothing sent", rc != 0 and not seen)
 
 # ext_pan is a string, even when it is all digits; the answer carries "pending"
-rc, out, err = run(host, ["ext_pan=0011223344556677", "name=123", "settle_ms=0011"], good)
-check("ext_pan/name stay JSON strings (digits only), settle_ms stays a number",
+rc, out, err = run(host, ["ext_pan=0011223344556677", "name=123", "rx_wd_s=0011"], good)
+check("ext_pan/name stay JSON strings (digits only), rx_wd_s stays a number",
       rc == 0 and json.loads(seen[0][4]) ==
-      {"ext_pan": "0011223344556677", "name": "123", "settle_ms": 11})
+      {"ext_pan": "0011223344556677", "name": "123", "rx_wd_s": 11})
 check("ext_pan: the body is printed with pending [\"ext_pan\"]",
       json.loads(out)["pending"] == ["ext_pan"] and json.loads(out)["ext_pan"] == "0011223344556677")
 rc, out, err = run(host, ["ext_pan=00112233aabbccdd"], good)
@@ -382,7 +381,7 @@ for args, why in ((["--events", "x"], "SECS not a number"), (["--events", "0"], 
                   (["--events"], "SECS missing"), (["--events", "5", "6"], "two SECS")):
     rc, out, err = run(host, args, good)
     check(f"{' '.join(args)}: refused ({why}), nothing sent", rc != 0 and not seen and out == "")
-for args in (["--state", "role=none"], ["role=none", "--state"], ["--pair", "settle_ms=1"],
+for args in (["--state", "role=none"], ["role=none", "--state"], ["--pair", "rx_wd_s=1"],
              ["--light", "{}", "role=none"], ["--events", "1", "name=x"], ["role=none", "--events", "1"]):
     rc, out, err = run(host, args, good)
     check(f"mode plus key=value {' '.join(args)}: refused, nothing sent", rc != 0 and not seen and out == "")

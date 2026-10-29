@@ -13,7 +13,7 @@
  *   409 wrong_role    /light in the shortcut role; /button/release outside it
  *   409 no_press      /button/release with nothing held
  *   503 zigbee_busy   the stack is not up or its lock was busy; for a release, also an Off refused (the press
- *                     stays held and its own timeout retries)
+ *                     stays held; the client calls again)
  * Answers that are not refusals: 200 {"ok":true}; 200 {"ok":false,"ignored":"controller_command_3s"} within 3 s of a
  * Zigbee controller command (the echo window, the client's loop guard); 200 {"ok":false,"ignored":"<light_apply's message>"} when an
  * attribute was refused (as /zb/light answers 200 with each status).

@@ -30,10 +30,10 @@ re-pair.
   client copies them onto the real light; when the real light changes, the client tells the board with
   `POST /api/v1/light`, and the board reports it to the Zigbee controller, so the controller's tile follows the
   real light.
-- **`shortcut`** — the board is a button. A Zigbee controller command that leaves the light on is a press, and the client
-  sees it as a press count in the state (or at the webhook). When the client has done its work it calls
-  `POST /api/v1/button/release`, and the board reports Off so the tile clears; if the client never does, the
-  board's own timeout (`off_after_s`, default never) releases it.
+- **`shortcut`** — the board is a button. The first Zigbee controller command that turns the light on is a press,
+  pushed at once, and the client sees it as a press count in the state (or at the webhook). The press is held
+  until the client calls `POST /api/v1/button/release`, and the board reports Off so the tile clears, or until
+  the touchscreen turns the light off. The board never releases a press by itself.
 
 **The webhook** is an optional URL the board posts to (`{"press":N,…}` and `{"release":N,"by":…}`) for a
 client that cannot hold the event stream open. The event stream is the main path.
@@ -90,7 +90,7 @@ The full contract is [`docs/protocol.md`](docs/protocol.md). The two-minute vers
 - `GET /state` returns everything once.
 - `GET /events` returns it again as a Server-Sent Events stream: the full state first, then only what changed.
 - `POST /light` tells the board what the real light is now.
-- `PUT /settings` changes the role, the timings, the webhook, the name and the `hue` setting.
+- `PUT /settings` changes the role, the webhook, the receive watchdog, the name and the `hue` setting.
 
 The board announces itself over mDNS as `_zigbee-anthema._tcp`, and a client claims it with `POST /claim`.
 
@@ -103,7 +103,7 @@ command line. A first install from the web page erases the board's pairing; upda
 
 ## Adapting it
 
-[`docs/adapting.md`](docs/adapting.md) covers the identity options, the roles, the timings, the webhook, writing
+[`docs/adapting.md`](docs/adapting.md) covers the identity options, the roles, the receive watchdog, the webhook, writing
 a client, and the tools. To build, with ESP-IDF v5.5:
 
 ```sh

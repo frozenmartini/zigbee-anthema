@@ -1,6 +1,5 @@
 #pragma once
-/* The board's settings (0.4.0): its role, the webhook, the shortcut button's
- * timings and the RX watchdog (0.5.0: also the Zigbee ext_pan pin and the board's name; 0.7.0: the
+/* The board's settings (0.4.0): its role, the webhook and the RX watchdog (0.5.0: also the Zigbee ext_pan pin and the board's name; 0.7.0: the
  * hue answer, hue), stored in NVS namespace "c6cfg" and changed live over HTTP
  * (GET/PUT /api/v1/settings). See settings.c. */
 #include <stdbool.h>
@@ -16,14 +15,11 @@ enum { CFG_ROLE_NONE = 0, CFG_ROLE_MIRROR = 1, CFG_ROLE_SHORTCUT = 2, CFG_ROLE_C
 /* One bit per key, for "which keys" masks: stored in NVS, present in a request. */
 #define CFG_K_ROLE        (1u << 0)
 #define CFG_K_WEBHOOK     (1u << 1)
-#define CFG_K_SETTLE_MS   (1u << 2)
-#define CFG_K_REARM_MS    (1u << 3)
-#define CFG_K_OFF_AFTER_S (1u << 4)
-#define CFG_K_RX_WD_S     (1u << 5)
-#define CFG_K_EXT_PAN     (1u << 6)
-#define CFG_K_NAME        (1u << 7)
-#define CFG_K_HUE         (1u << 8)
-#define CFG_K_COUNT       9
+#define CFG_K_RX_WD_S     (1u << 2)
+#define CFG_K_EXT_PAN     (1u << 3)
+#define CFG_K_NAME        (1u << 4)
+#define CFG_K_HUE         (1u << 5)
+#define CFG_K_COUNT       6
 
 #define CFG_NAME_MAX 40                    /* bytes of the board's name, without the NUL */
 
@@ -32,9 +28,6 @@ enum { CFG_ROLE_NONE = 0, CFG_ROLE_MIRROR = 1, CFG_ROLE_SHORTCUT = 2, CFG_ROLE_C
 typedef struct {
     uint8_t role;                          /* CFG_ROLE_* */
     char webhook[CFG_WEBHOOK_MAX + 1];     /* empty: no pushes */
-    uint32_t settle_ms;                    /* shortcut: Zigbee controller quiet time before a press is pushed */
-    uint32_t rearm_ms;                     /* shortcut: an On this soon after a release is released */
-    uint32_t off_after_s;                  /* shortcut: self-release timeout; 0: never (default 0 since 0.6.0) */
     uint32_t rx_wd_s;                      /* RX-silence watchdog; 0: off */
     char ext_pan[17];                      /* the only extended PAN ID to join, 16 hex MSB first; empty: any (0.5.0) */
     bool hue;                              /* the hue answer: on, CurrentHue is served; off, it is 0x86 — read once by
@@ -72,13 +65,7 @@ esp_err_t cfg_nvs_write(const cfg_t *next, uint32_t keys);
 /* Copies the keys in `keys` from next into cfg_live and marks them stored. Hold s_light_mux. */
 void cfg_publish_locked(const cfg_t *next, uint32_t keys);
 
-/* In bulb.c: update a held button's timeout after publishing settings (hold s_light_mux), then wake
- * the button task after a successful PUT (outside the mux) so pending timings apply at once. */
-void bulb_settings_changed_locked(uint32_t keys);
-void bulb_settings_changed(void);
-
-/* The settings as JSON keys into o: role, webhook (masked), settle_ms, rearm_ms, off_after_s, rx_wd_s, ext_pan,
- * name, hue. GET /api/v1/settings adds "stored" (PUT also "pending", listing ext_pan and/or hue); the state
+/* The settings as JSON keys into o: role, webhook (masked), rx_wd_s, ext_pan, name, hue. GET /api/v1/settings adds "stored" (PUT also "pending", listing ext_pan and/or hue); the state
  * object's "settings" is exactly this (api/v1/state.c). False: out of memory. */
 struct cJSON;
 bool cfg_json_add(struct cJSON *o, const cfg_t *c);

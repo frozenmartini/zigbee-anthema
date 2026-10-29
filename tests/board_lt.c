@@ -168,12 +168,16 @@ static void probe_lt(void) {
         lt_fresh(1, CFG_ROLE_SHORTCUT); s_held = true; lock_ok = false; req_init(&lt_r); api_call(button_release_post, &lt_r);
         printf("lt6 the lock busy: http=%d, held=%d\n", lt_r.code, s_held);
         CHECK(lt_err_is(503, "zigbee_busy") && s_held && model_on == 1);
+        /* the touchscreen's Off lands while the release waits for the Zigbee lock: already released, so 409 no_press (not 503), no Off written */
+        lt_fresh(1, CFG_ROLE_SHORTCUT); s_held = true; g_acquire_hook = inject_hub_off; req_init(&lt_r); api_call(button_release_post, &lt_r);
+        printf("lt6 a Zigbee controller Off while the release waits for the lock: http=%d, held=%d, release_by=%s, Off sets=%d\n", lt_r.code, s_held, s_release_by ? s_release_by : "(null)", g_off_sets);
+        CHECK(lt_err_is(409, "no_press") && !s_held && s_release_by && !strcmp(s_release_by, "zigbee") && g_off_sets == 0);
         /* old probe 6, with the release arriving through the endpoint: the press webhook, then one release webhook by api */
-        lt_fresh(1, CFG_ROLE_SHORTCUT); s_press_at_us = s_press_first_us = 7000000; g_press_hook = lt_hook_release; run_button();
+        lt_fresh(1, CFG_ROLE_SHORTCUT); s_press_pending = true; g_press_hook = lt_hook_release; run_button();
         printf("lt6 old probe 6 through /button/release: posts=%d [", g_nposts);
         for (int i = 0; i < g_nposts; i++) printf("%s%s", i ? " | " : "", g_posts[i]);
         printf("], model_on=%d, held=%d, delivering=%d\n", model_on, s_held, s_delivering);
-        CHECK(g_nposts == 2 && post_has(0, "\"press\":1") && post_has(1, "\"release\":1") && post_has(1, "\"by\":\"api\"") && g_press_posts == 1 && g_release_posts == 1 && !model_on && !s_held && !s_delivering && !s_off_at_us && !s_release_by);
+        CHECK(g_nposts == 2 && post_has(0, "\"press\":1") && post_has(1, "\"release\":1") && post_has(1, "\"by\":\"api\"") && g_press_posts == 1 && g_release_posts == 1 && !model_on && !s_held && !s_delivering && !s_release_by);
     }
-    verdict("lt6", "POST /button/release: shortcut and held, Off applied (release_by api, held cleared, 200 ok) and old probe 6's two posts unchanged; not held 409 no_press; another role 409 wrong_role; the Off refused or the lock busy 503 zigbee_busy with the press still held");
+    verdict("lt6", "POST /button/release: shortcut and held, Off applied (release_by api, held cleared, 200 ok) and old probe 6's two posts unchanged; not held 409 no_press; another role 409 wrong_role; the Off refused or the lock busy 503 zigbee_busy with the press still held; a Zigbee controller Off while it waits for the lock 409 no_press with no Off written");
 }

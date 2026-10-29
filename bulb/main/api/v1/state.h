@@ -52,7 +52,7 @@ void bulb_light_snapshot(bulb_light_snap_t *out);
 typedef struct {
     bool held;                          /* a pushed press not yet released */
     uint32_t press;                     /* presses since boot */
-    const char *release_by;             /* the last release: "api", "zigbee", "timeout"; NULL: none yet */
+    const char *release_by;             /* the last release: "api", "zigbee"; NULL: none yet */
     int64_t at_us;                      /* the last change of held or press; 0: never */
 } bulb_button_snap_t;
 void bulb_button_snapshot(bulb_button_snap_t *out);

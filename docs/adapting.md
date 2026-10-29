@@ -54,25 +54,23 @@ level anyway, so swapping a board's role needs no re-pair.
   light is with `POST /api/v1/light`, which the board reports to the Zigbee controller. A `POST /light` that arrives within
   3 seconds of a Zigbee controller command is ignored (`"ignored":"controller_command_3s"`), so a client that mirrors
   the controller's own command back does not loop.
-- **`shortcut`** — a button. A Zigbee controller command that leaves the light on is a press. The client sees the press
-  count rise in `button` (and at the webhook), does its work, and calls `POST /api/v1/button/release`; the
-  board reports Off so the controller's tile clears.
+- **`shortcut`** — a button. The first Zigbee controller command that turns the light on is a press, pushed at once.
+  The client sees the press count rise in `button` (and at the webhook), does its work, and calls
+  `POST /api/v1/button/release`; the board reports Off so the controller's tile clears. The press is held until
+  then, or until the touchscreen turns the light off.
 
-## The timings
+## The receive watchdog
 
-All are settings, with a default in Kconfig used until a value is stored.
+`rx_wd_s` is a setting, with a default in Kconfig used until a value is stored.
 
 | Setting | What it does | Range | Default |
 |---|---|---|---|
-| `settle_ms` | Shortcut: how long the Zigbee controller must be quiet before a press is pushed. A preset can be several frames (On, level, colour); this makes it one press | 200–10000 | 2000 |
-| `rearm_ms` | Shortcut: an On this soon after a release is released again instead of counting as a new press | 0–30000 | 3000 |
-| `off_after_s` | Shortcut: the board releases a press by itself after this many seconds (`release_by: "timeout"`). 0 = never; use it only as a backstop for a client that may never release | 0 or 10–3600 | 0 |
 | `rx_wd_s` | Receive watchdog: reboot after this many seconds without receiving a frame from the Zigbee controller. Armed after the first frame since boot; 0 = off | 0 or 30–3600 | 0 |
 
 ## The webhook
 
 The `webhook` setting is an optional URL the board posts JSON to, for a client that cannot hold `GET /events`
-open. A press, once the Zigbee controller has been quiet for `settle_ms`:
+open. A press, pushed at the first command that turns the group on:
 
 ```json
 {"press": 4, "settled": true, "on": 1, "level": 90, "mode": 0, "hue": 0, "sat": 254}
@@ -81,11 +79,11 @@ open. A press, once the Zigbee controller has been quiet for `settle_ms`:
 A release:
 
 ```json
-{"release": 4, "by": "timeout"}
+{"release": 4, "by": "zigbee"}
 ```
 
-`by` is `"timeout"` (the board's `off_after_s`), `"zigbee"` (the Zigbee controller turned the light off) or `"api"` (a client
-called `POST /api/v1/button/release`).
+`by` is `"zigbee"` (the Zigbee controller turned the light off) or `"api"` (a client called
+`POST /api/v1/button/release`).
 `GET /settings` shows the URL masked.
 
 ## Building a client

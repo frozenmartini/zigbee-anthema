@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-set(PROJECT_VER "0.7.0")
+set(PROJECT_VER "0.8.0")
 set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../components")
 # build only main and what it requires, not every component in ../components
 set(COMPONENTS main)

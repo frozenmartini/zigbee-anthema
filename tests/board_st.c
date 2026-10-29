@@ -8,10 +8,10 @@ static void st_max_state(void) {                       /* every source at its ma
     reset_case(); s_zb_up = true; g_joined = true;
     memset(cfg_live.name, 'n', 40); cfg_live.name[40] = 0;
     snprintf(cfg_live.webhook, sizeof cfg_live.webhook, "http://192.0.2.200:8123/api/webhook/%s", "zq9-abcdefghijklmnopqrstuvwxyz-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789");
-    snprintf(cfg_live.ext_pan, sizeof cfg_live.ext_pan, "A1B2C3D4E5F60718"); cfg_live.role = CFG_ROLE_MIRROR; cfg_live.settle_ms = 60000; cfg_live.rearm_ms = 60000; cfg_live.off_after_s = 86400; cfg_live.rx_wd_s = 3600; cfg_live.stored = 0x1ff;
+    snprintf(cfg_live.ext_pan, sizeof cfg_live.ext_pan, "A1B2C3D4E5F60718"); cfg_live.role = CFG_ROLE_MIRROR; cfg_live.rx_wd_s = 3600; cfg_live.stored = (1u << CFG_K_COUNT) - 1;
     snprintf(g_info.ip, sizeof g_info.ip, "255.255.255.255"); g_info.uptime_s = 4294967295u; g_info.rssi = -100;
     s_light.seen = 0xff; for (int i = 0; i < L_COUNT; i++) { s_light.val[i] = 65535; s_hub.val[i] = 65535; } s_hub.seen = 0xff;
-    s_light_by = "restore"; s_light_at_us = 9000000000000LL; s_hub_cmd_us = 9000000000000LL; s_hub_seq = 4294967295u; s_presses = 4294967295u; s_release_last = "timeout"; s_button_at_us = 9000000000000LL; s_held = true;
+    s_light_by = "restore"; s_light_at_us = 9000000000000LL; s_hub_cmd_us = 9000000000000LL; s_hub_seq = 4294967295u; s_presses = 4294967295u; s_release_last = "zigbee"; s_button_at_us = 9000000000000LL; s_held = true;
     s_group = 0xFFFF; g_zb_rx_last = 5000000; s_reporting_ok = true; s_light_gen = 1; s_saved_gen = 0; fake_now = 9000000000000LL;
     s_update = (c6_update_t){.state = "rebooting", .version = "0123456789012345678901234567890", .percent = 100, .error = ""};   /* 0.6.0: the update object at its longest (31-character version) */
 }
@@ -52,7 +52,7 @@ static void probe_st(void) {
         static char buf[4096]; int len; cJSON *j = st_obj(ST_BOARD | ST_SETTINGS | ST_ZIGBEE, buf, sizeof buf, &len);
         const cJSON *b = st_get(j, "board"), *se = st_get(j, "settings"), *z = st_get(j, "zigbee");
         const char *bk[] = {"id", "name", "fw", "api", "hw", "uptime_s", "ip", "rssi", "ota_state", "partition"}; int bok = b != NULL; for (int i = 0; i < 10; i++) bok &= st_has_key(b, bk[i]);
-        const char *sk[] = {"role", "webhook", "settle_ms", "rearm_ms", "off_after_s", "rx_wd_s", "ext_pan", "name", "hue"}; int sok = se != NULL; for (int i = 0; i < 9; i++) sok &= st_has_key(se, sk[i]);
+        const char *sk[] = {"role", "webhook", "rx_wd_s", "ext_pan", "name", "hue"}; int sok = se != NULL; for (int i = 0; i < 6; i++) sok &= st_has_key(se, sk[i]);
         const char *zk[] = {"joined", "ieee", "short", "channel", "pan", "ext_pan", "reporting", "last_rx_s", "profile", "hue", "group"}; int zok = z != NULL; for (int i = 0; i < 11; i++) zok &= st_has_key(z, zk[i]);
         const cJSON *grp = st_get(z, "group"), *rx = st_get(z, "last_rx_s"), *ep = st_get(z, "ext_pan");
         int noleak = !strstr(buf, "\"ssid\"") && !strstr(buf, "\"pass\"") && !strstr(buf, "\"password\"") && !strstr(buf, "test_zq9") && !strstr(buf, "zq9") && !strstr(buf, G_TOKEN);
@@ -82,14 +82,12 @@ static void probe_st(void) {
         printf("st3 nothing seen: attributes null=%d, by null=%d, at_s null=%d, unsaved=%d\n", allnull, st_is_null(l, "by"), st_is_null(l, "at_s"), cJSON_IsTrue(st_get(l, "unsaved")));
         CHECK(allnull && st_is_null(l, "by") && st_is_null(l, "at_s") && cJSON_IsFalse(st_get(l, "unsaved")));
         cJSON_Delete(j);
-        const char *want_by[6] = {"zigbee", "api", "self", "self", "self", "restore"}; const char *how[6] = {"Zigbee controller frame", "/light", "ROLE-OFF", "BUTTON-TIMEOUT", "BUTTON-LATE", "light_restore"}; double last_at = -1; int ok = 1;
-        for (int k = 0; k < 6; k++) {
+        const char *want_by[4] = {"zigbee", "api", "self", "restore"}; const char *how[4] = {"Zigbee controller frame", "/light", "ROLE-OFF", "light_restore"}; double last_at = -1; int ok = 1;
+        for (int k = 0; k < 4; k++) {
             fake_now += 5000000; int64_t now = fake_now; char msg[120]; int want[L_COUNT]; for (int i = 0; i < L_COUNT; i++) want[i] = -1; want[L_LEVEL] = 10 + k;
             if (k == 0) { portENTER_CRITICAL(&s_light_mux); s_light.val[L_ON] = 1; s_light.seen |= 1u << L_ON; light_mark_changed_locked(now, "zigbee"); portEXIT_CRITICAL(&s_light_mux); }
             else if (k == 1) light_apply(want, "API-SET", msg, sizeof msg, false, NULL);
             else if (k == 2) light_apply(want, "ROLE-OFF", msg, sizeof msg, false, NULL);
-            else if (k == 3) light_apply(want, "BUTTON-TIMEOUT", msg, sizeof msg, false, NULL);
-            else if (k == 4) light_apply(want, "BUTTON-LATE", msg, sizeof msg, false, NULL);
             else { light_state_t sv = {.seen = 1u << L_ON | 1u << L_LEVEL}; sv.val[L_ON] = 1; sv.val[L_LEVEL] = 99; memcpy(g_restore_blob, &sv, sizeof sv); g_restore_n = sizeof sv; restore_in_signal_handler(); }
             j = st_obj(ST_LIGHT, buf, sizeof buf, &len); l = st_get(j, "light"); const cJSON *by = st_get(l, "by"), *at = st_get(l, "at_s");
             int good = by && cJSON_IsString(by) && !strcmp(by->valuestring, want_by[k]) && at && cJSON_IsNumber(at) && at->valuedouble > last_at;
@@ -122,15 +120,14 @@ static void probe_st(void) {
         bool dropped = hub_tap(&gd); bulb_light_snapshot(&sn);
         printf("st4 Zigbee controller frames: 2 decoded + 1 unknown command + 2 ignored frames: seq=%u; then a dropped group Off (decoded, consumed=%d): seq=%u\n", seq3, dropped, sn.hub_seq);
         CHECK(seq3 == 2 && dropped && sn.hub_seq == 3);
-        const char *whos[3] = {"api", "zigbee", "timeout"}; int seen_ok = 1;
-        for (int k = 0; k < 3; k++) {
+        const char *whos[2] = {"api", "zigbee"}; int seen_ok = 1;
+        for (int k = 0; k < 2; k++) {
             reset_case(); st_role(CFG_ROLE_SHORTCUT); s_zb_up = true; s_presses = (uint32_t)k; s_release_last = k ? whos[k - 1] : NULL;
-            s_press_at_us = s_press_first_us = fake_now - 3000000; run_button();                  /* a press settled: delivered, held */
+            s_press_pending = true; run_button();                                                  /* a press pending: delivered, held */
             bulb_button_snap_t bs; bulb_button_snapshot(&bs); int held1 = bs.held; uint32_t press1 = bs.press;
             char msg[100];
             if (k == 0) bulb_button_release(msg, sizeof msg);
-            else if (k == 1) ctl(6, OFF, sizeof OFF);
-            else { s_off_at_us = fake_now - 1000; run_button(); }
+            else ctl(6, OFF, sizeof OFF);
             bulb_button_snapshot(&bs); char buf2[600]; state_json(buf2, sizeof buf2, ST_BUTTON); cJSON *bj = cJSON_Parse(buf2); const cJSON *bb = st_get(bj, "button");
             printf("st4 press %d, release by %s: held after the press=%d press=%u; after the release held=%d release_by=%s json press=%g\n", k + 1, whos[k], held1, press1, bs.held, bs.release_by ? bs.release_by : "none", st_get(bb, "press")->valuedouble);
             seen_ok &= held1 == 1 && press1 == (uint32_t)k + 1 && !bs.held && bs.release_by && !strcmp(bs.release_by, whos[k]) && st_get(bb, "press")->valuedouble == k + 1 && !strcmp(st_get(bb, "release_by")->valuestring, whos[k]);
@@ -138,7 +135,7 @@ static void probe_st(void) {
         }
         CHECK(seen_ok);
     }
-    verdict("st4", "the Zigbee controller and button blocks: controller.seq counts decoded commands only (an unknown command or an ignored frame adds none); settled true; button.press counts, held follows s_held, release_by is the last of api, zigbee, timeout and none before any; update is the constant object");
+    verdict("st4", "the Zigbee controller and button blocks: controller.seq counts decoded commands only (an unknown command or an ignored frame adds none); settled true; button.press counts, held follows s_held, release_by is the last of api and zigbee, and none before any; update is the constant object");
 
     /* st5. state_mark and its sites */
     {   reset_case(); events_start(); uint32_t d0; long a0, f0; int dl0, sem0, nl0, nt0;
@@ -156,8 +153,8 @@ static void probe_st(void) {
         { int64_t now = fake_now + 1000; ST_SITE("light change", ST_LIGHT, { portENTER_CRITICAL(&s_light_mux); light_mark_changed_locked(now, "zigbee"); portEXIT_CRITICAL(&s_light_mux); }); }
         ST_SITE("Zigbee controller command, mirror", ST_HUB, { st_role(CFG_ROLE_MIRROR); static const uint8_t f[] = {1, 1, 1}; ctl(6, f, 3); });
         ST_SITE("Zigbee controller command, shortcut", ST_HUB | ST_BUTTON, { st_role(CFG_ROLE_SHORTCUT); static const uint8_t f[] = {1, 1, 0}; ctl(6, f, 3); });
-        ST_SITE("button transition", ST_BUTTON, { st_role(CFG_ROLE_SHORTCUT); s_press_at_us = s_press_first_us = fake_now - 3000000; run_button(); });
-        ST_SITE("settings publish", ST_SETTINGS, { g_auto_bearer = 1; bd_put("{\"settle_ms\":2500}"); });
+        ST_SITE("button transition", ST_BUTTON, { st_role(CFG_ROLE_SHORTCUT); s_press_pending = true; run_button(); });
+        ST_SITE("settings publish", ST_SETTINGS, { g_auto_bearer = 1; bd_put("{\"rx_wd_s\":60}"); });
         ST_SITE("join signal", ST_ZIGBEE, { s_steer_timer = NULL; static int ok0 = 0; ezb_app_signal_t sg = {EZB_BDB_SIGNAL_STEERING, &ok0}; on_signal(&sg); });
         ST_SITE("rejoin signal", ST_ZIGBEE, { g_factory_new = false; static int ok1 = 0; ezb_app_signal_t sg = {EZB_BDB_SIGNAL_DEVICE_REBOOT, &ok1}; on_signal(&sg); });
         ST_SITE("leave signal", ST_ZIGBEE, { ezb_zdo_signal_leave_params_t p = {.leave_type = EZB_ZDO_LEAVE_TYPE_RESET}; ezb_app_signal_t sg = {EZB_ZDO_SIGNAL_LEAVE, &p}; on_signal(&sg); });

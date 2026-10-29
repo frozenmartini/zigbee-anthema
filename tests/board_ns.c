@@ -33,13 +33,13 @@ static void probe_ns(void) {
         const struct {const char *body; const char *what;} bad[] = {
             {"{\"name\":\"\"}", "empty"}, {NULL, "41 bytes"}, {"{\"name\":\"a\\u0007b\"}", "BEL"}, {"{\"name\":\"a\\nb\"}", "newline"}, {"{\"name\":\"a\\u007fb\"}", "DEL"},
             {"{\"name\":5}", "a number"}, {"{\"name\":null}", "null"},
-            {"{\"name\":\"\",\"settle_ms\":2500}", "empty + a valid key"}, {"{\"settle_ms\":2500,\"name\":\"x\\u0001\"}", "valid key + control"}};
+            {"{\"name\":\"\",\"rx_wd_s\":300}", "empty + a valid key"}, {"{\"rx_wd_s\":300,\"name\":\"x\\u0001\"}", "valid key + control"}};
         for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
             char b41[80]; ns_boot(""); int s0 = g_cfg_sets, c0 = g_cfg_commits, m0 = g_nmarks; const char *body = bad[i].body;
             if (!body) { snprintf(b41, sizeof b41, "{\"name\":\"%s\"}", n41); body = b41; }
             int c = bd_put(body);
-            printf("ns1 PUT name %s: http=%d names name=%d, NVS sets +%d, commits +%d, name stored=%d, settle_ms=%u, marks +%d\n", bad[i].what, c, ns_names("name"), g_cfg_sets - s0, g_cfg_commits - c0, kv_s("name") != NULL, cfg_live.settle_ms, g_nmarks - m0);
-            CHECK(c == 400 && ns_names("name") && g_cfg_sets == s0 && g_cfg_commits == c0 && !kv_s("name") && cfg_live.settle_ms == 2000 && !(cfg_live.stored & (CFG_K_NAME | CFG_K_SETTLE_MS)) && g_nmarks == m0);
+            printf("ns1 PUT name %s: http=%d names name=%d, NVS sets +%d, commits +%d, name stored=%d, rx_wd_s=%u, marks +%d\n", bad[i].what, c, ns_names("name"), g_cfg_sets - s0, g_cfg_commits - c0, kv_s("name") != NULL, cfg_live.rx_wd_s, g_nmarks - m0);
+            CHECK(c == 400 && ns_names("name") && g_cfg_sets == s0 && g_cfg_commits == c0 && !kv_s("name") && cfg_live.rx_wd_s == 0 && !(cfg_live.stored & (CFG_K_NAME | CFG_K_RX_WD_S)) && g_nmarks == m0);
         }
         ns_boot(""); c6_discovery_start(); int n0 = g_mdns_name_sets, m0 = g_nmarks; int c = ns_put_name("zq9 light");
         int ms = 0, mb = 0; for (int i = m0; i < g_nmarks && i < 512; i++) { ms |= (g_marks[i] & C6_ST_SETTINGS) != 0; mb |= (g_marks[i] & C6_ST_BOARD) != 0; }
@@ -48,7 +48,7 @@ static void probe_ns(void) {
         n0 = g_mdns_name_sets; m0 = g_nmarks; c = ns_put_name("zq9 light"); mb = 0; for (int i = m0; i < g_nmarks && i < 512; i++) mb |= (g_marks[i] & C6_ST_BOARD) != 0;
         printf("ns1 the same name again: http=%d, set_name calls +%d, BOARD marked=%d\n", c, g_mdns_name_sets - n0, mb);
         CHECK(c == 200 && g_mdns_name_sets == n0 && !mb);
-        n0 = g_mdns_name_sets; c = bd_put("{\"settle_ms\":2500}");
+        n0 = g_mdns_name_sets; c = bd_put("{\"rx_wd_s\":300}");
         printf("ns1 a PUT without name: http=%d, set_name calls +%d\n", c, g_mdns_name_sets - n0); CHECK(c == 200 && g_mdns_name_sets == n0);
     }
     verdict("ns1", "name: 1-40 bytes without a control character is accepted, stored and answered; empty, 41 bytes, a control character, a number, null are 400 naming name, all-or-nothing with a valid second key; none stored shows 'Zigbee Anthema <id>' from the host name and not in stored; a change calls c6_discovery_set_name once and marks SETTINGS and BOARD");
@@ -69,9 +69,9 @@ static void probe_ns(void) {
         CHECK(c == 200 && !ns_has("pending", "ext_pan") && ns_has("stored", "ext_pan"));
         const char *bad[] = {"0123456789ABCDE", "0123456789ABCDEF0", "0123456789ABCDEG", "0x0123456789ABCD", " 123456789ABCDEF", "0123456789ABCDEF ", "01234 6789ABCDEF", "0123456789ABCDE\\n", "z"};
         for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
-            ns_boot(NS_PAN_DEFAULT); char b[120]; snprintf(b, sizeof b, "{\"ext_pan\":\"%s\",\"settle_ms\":2500}", bad[i]); int s0 = g_cfg_sets, c0 = g_cfg_commits; c = bd_put(b);
-            printf("ns2 PUT ext_pan '%s' + settle_ms: http=%d names ext_pan=%d, NVS sets +%d, commits +%d, ext_pan stored=%d, settle_ms=%u\n", bad[i], c, ns_names("ext_pan"), g_cfg_sets - s0, g_cfg_commits - c0, kv_s("ext_pan") != NULL, cfg_live.settle_ms);
-            CHECK(c == 400 && ns_names("ext_pan") && g_cfg_sets == s0 && g_cfg_commits == c0 && !kv_s("ext_pan") && cfg_live.settle_ms == 2000 && !(cfg_live.stored & (CFG_K_EXT_PAN | CFG_K_SETTLE_MS)));
+            ns_boot(NS_PAN_DEFAULT); char b[120]; snprintf(b, sizeof b, "{\"ext_pan\":\"%s\",\"rx_wd_s\":300}", bad[i]); int s0 = g_cfg_sets, c0 = g_cfg_commits; c = bd_put(b);
+            printf("ns2 PUT ext_pan '%s' + rx_wd_s: http=%d names ext_pan=%d, NVS sets +%d, commits +%d, ext_pan stored=%d, rx_wd_s=%u\n", bad[i], c, ns_names("ext_pan"), g_cfg_sets - s0, g_cfg_commits - c0, kv_s("ext_pan") != NULL, cfg_live.rx_wd_s);
+            CHECK(c == 400 && ns_names("ext_pan") && g_cfg_sets == s0 && g_cfg_commits == c0 && !kv_s("ext_pan") && cfg_live.rx_wd_s == 0 && !(cfg_live.stored & (CFG_K_EXT_PAN | CFG_K_RX_WD_S)));
         }
         ns_boot(NS_PAN_DEFAULT); c = bd_put("{\"ext_pan\":5}"); printf("ns2 PUT ext_pan as a number: http=%d\n", c); CHECK(c == 400 && ns_names("ext_pan") && !kv_s("ext_pan"));
     }

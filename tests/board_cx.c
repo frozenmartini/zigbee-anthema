@@ -13,7 +13,7 @@ static int cx_bad, cx_leak, cx_n500;
 static portMUX_TYPE cx_mux = portMUX_INITIALIZER_UNLOCKED;               /* a second mux, for the nesting detector's control */
 static void cx_answer(httpd_req_t *r, const char *what) { if (r->code >= 400 && !cx_shape(r->code, r->type, r->response)) { cx_bad++; printf("  cx2 WRONG SHAPE (%s): %d %s '%.120s'\n", what, r->code, r->type, r->response); } }
 static void cx_state(httpd_req_t *r) { req_init(r); api_call(state_get, r); }
-static void cx_settings(httpd_req_t *r) { reset_case(); cfg_load(); req_init(r); req_body(r, "{\"name\":\"zq9 light\",\"settle_ms\":2500}"); api_call(settings_put, r); }
+static void cx_settings(httpd_req_t *r) { reset_case(); cfg_load(); req_init(r); req_body(r, "{\"name\":\"zq9 light\",\"rx_wd_s\":300}"); api_call(settings_put, r); }
 static void cx_light(httpd_req_t *r) { lt_fresh(0, CFG_ROLE_MIRROR); req_init(r); req_body(r, "{\"on\":1,\"level\":50,\"hs\":[1,2]}"); api_call(light_v1_post, r); }
 static void cx_sweep(const char *name, void (*call)(httpd_req_t *)) {                 /* fail each cJSON allocation of one request in turn */
     httpd_req_t r; reset_case(); long a0 = g_cj_allocs; call(&r); long A = g_cj_allocs - a0; int five = 0, ok200 = 0, leaks = 0, bad0 = cx_bad;
@@ -48,7 +48,7 @@ static void probe_cx(void) {
         cx_bad = cx_leak = cx_n500 = 0;
         cx_sweep("GET /state", cx_state); cx_sweep("PUT /settings", cx_settings); cx_sweep("POST /light", cx_light);
         const char *lb[] = {"{\"on\":2}", "{\"on\":1,\"hs\":[[1],2]}", "null", "[1]", "{\"on\":1,\"bri\":1}", "{\"on\":1,\"ct\":300,\"hs\":[1,2]}", "{\"on\":1,\"level\":{\"a\":1}}", "{\"on\":1,\"hs\":[1,2,3]}", "", "{\"on\":"};
-        const char *sb[] = {"{\"name\":\"\"}", "{\"role\":\"x\"}", "{\"webhook\":\"nope\"}", "{\"ext_pan\":\"zz\"}", "{\"settle_ms\":1}", "[]", "null", "{\"a\":1}", "{\"a\":{\"b\":1}}", "{\"name\":5,\"settle_ms\":2500}", "{\"settle_ms\":2500,\"settle_ms\":2600}"};
+        const char *sb[] = {"{\"name\":\"\"}", "{\"role\":\"x\"}", "{\"webhook\":\"nope\"}", "{\"ext_pan\":\"zz\"}", "{\"rx_wd_s\":1}", "[]", "null", "{\"a\":1}", "{\"a\":{\"b\":1}}", "{\"name\":5,\"rx_wd_s\":300}", "{\"rx_wd_s\":300,\"rx_wd_s\":400}"};
         int refusals = 0;
         for (size_t i = 0; i < sizeof lb / sizeof lb[0]; i++) { lt_fresh(0, CFG_ROLE_MIRROR); long l0 = g_cj_live; lt_post(lb[i]); refusals += lt_r.code >= 400; cx_answer(&lt_r, "light"); if (g_cj_live != l0) { cx_leak++; printf("  cx2 LEAK in /light for '%s'\n", lb[i]); } }
         for (size_t i = 0; i < sizeof sb / sizeof sb[0]; i++) { reset_case(); cfg_load(); long l0 = g_cj_live; bd_put(sb[i]); refusals += bd_req.code >= 400; cx_answer(&bd_req, "settings"); if (g_cj_live != l0) { cx_leak++; printf("  cx2 LEAK in PUT /settings for '%s'\n", sb[i]); } }

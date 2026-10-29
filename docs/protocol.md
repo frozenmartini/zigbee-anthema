@@ -32,7 +32,7 @@ firmware and this file disagree, this file is the intent and the firmware has a 
   calls.
 - **Versioned.** Paths are under `/api/v1`. The board reports `api` in its TXT record and in `/info`; a client
   should refuse an `api` it does not know and say so.
-- **Settings live on the board; a mirror's mapping lives in the client.** Role, timings, watchdog and name are the
+- **Settings live on the board; a mirror's mapping lives in the client.** Role, receive watchdog and name are the
   board's. Which real lights a board mirrors is the client's concern: the board has no use for them.
 
 ## 2. Discovery
@@ -47,7 +47,7 @@ mDNS, on port 80:
 | Key | Example | Meaning |
 |---|---|---|
 | `api` | `1` | API major version |
-| `fw` | `0.7.0` | firmware version |
+| `fw` | `0.8.0` | firmware version |
 | `id` | `112233` | the serial: the last three bytes of the base MAC, lowercase. Stable; it is also the hostname's suffix and a good unique key for a client |
 | `mac` | `AA:BB:CC:11:22:33` | the base MAC, uppercase with colons |
 | `hw` | `nanoc6` | the board |
@@ -141,11 +141,11 @@ WebSocket support compiled in. Client to board is plain `POST`s either way.
 
 ```json
 {
-  "board": {"id": "112233", "name": "Zigbee Anthema 112233", "fw": "0.7.0", "api": 1,
+  "board": {"id": "112233", "name": "Zigbee Anthema 112233", "fw": "0.8.0", "api": 1,
             "hw": "nanoc6", "uptime_s": 8812, "ip": "192.0.2.32", "rssi": -61,
             "ota_state": "valid", "partition": "ota_1"},
   "settings": {"role": "mirror", "webhook": "http://192.0.2.49:8080/hook/ab12…",
-               "settle_ms": 2000, "rearm_ms": 3000, "off_after_s": 0, "rx_wd_s": 0, "hue": true},
+               "rx_wd_s": 0, "hue": true},
   "zigbee": {"joined": true, "ieee": "AABBCCFFFE112233", "short": "0x1A2B", "channel": 15,
              "pan": "0x1A62", "ext_pan": "A1B2C3D4E5F60718", "reporting": true,
              "last_rx_s": 4, "profile": "espressif", "hue": true, "group": "0x0001"},
@@ -162,9 +162,9 @@ WebSocket support compiled in. Client to board is plain `POST`s either way.
 |---|---|
 | `settings.webhook` | masked: the last path segment cut to 4 characters + `…`; `""` when empty. Never the full id |
 | `settings.hue` | `true` or `false`: what a `PUT` last stored. It takes effect at the next reboot or `/zigbee/erase` (§6.3) |
-| `light` | the fake bulb's own attributes; `null` = never set. `mode` 0 hue/sat, 1 xy, 2 colour temperature. **`by`** says who set it last: `zigbee` (a command from the Zigbee controller), `api` (`POST /light`), `self` (the button's own Off, `ROLE-OFF`), `restore` (power-up). `at_s` is board uptime at the change |
-| `controller` | what the Zigbee controller has asked for so far, the same object the webhook pushes; `seq` counts its commands and is what a mirror reacts to; `settled` is always `true` in the state, which shows the Zigbee controller's target at once |
-| `button` | shortcut role: `press` counts presses since boot, `held` while one is pushed and not released, `release_by` `api`/`zigbee`/`timeout`/`none`. A new press is a `change` on `button` with `press` incremented and `held` true. Role `mirror`/`none`: `held` false, counts frozen |
+| `light` | the fake bulb's own attributes; `null` = never set. `mode` 0 hue/sat, 1 xy, 2 colour temperature. **`by`** says who set it last: `zigbee` (a command from the Zigbee controller), `api` (`POST /light`), `self` (the board's own Off at a role change, `ROLE-OFF`), `restore` (power-up). `at_s` is board uptime at the change |
+| `controller` | what the Zigbee controller has asked for so far, the same object the webhook pushes; `seq` counts its commands and is what a mirror reacts to; `settled` is always `true`: the state shows the Zigbee controller's target at once, and the board pushes a press as it stood |
+| `button` | shortcut role: `press` counts presses since boot, `held` while one is pushed and not released, `release_by` `api`/`zigbee`/`none`. A new press is a `change` on `button` with `press` incremented and `held` true. Role `mirror`/`none`: `held` false, counts frozen |
 | `zigbee.group` | the Zigbee group the board was added to, from the Zigbee controller's Groups cluster Add Group; `null` before a save. A group move is Remove Group then Add Group, so it follows. Stored in flash, so it survives a reboot |
 | `zigbee.reporting` | the On/Off reporting entry is present; `last_rx_s` is seconds since the last frame from the Zigbee controller — the watchdog's view |
 | `zigbee.profile` | the identity compiled in: `"espressif"` (the default) or `"sengled_e11"` |
@@ -201,25 +201,21 @@ never commands it.
 
 The client says the shortcut has run; the board reports Off so the Zigbee controller's tile clears.
 
-- No body. `200` if a press was held; `409 no_press` if not; `409 wrong_role` outside the shortcut role.
-- The board keeps its own timeout (`off_after_s`) and pushes `release_by: "timeout"` if the client never calls.
-  `off_after_s` defaults to **0** (never) in the shortcut role: a press stays held until the client confirms
-  (a button) or the Zigbee controller turns it off (a switch). Which of the two a board is in is only a matter of who
-  releases, which `release_by` reports.
+- No body. `200` if a press was held; `409 no_press` if not; `409 wrong_role` outside the shortcut role;
+  `503 zigbee_busy` if the Off could not be applied, and the press stays held until the client calls again.
+- There is no board-side timeout: a press is pushed at the first command that turns the group on, and held
+  until it is released, by the client here (a button) or by the Zigbee controller turning it off (a switch).
+  Which of the two a board is in is only a matter of who releases, which `release_by` reports.
 
 ### 6.3 `GET /settings`, `PUT /settings`
 
 ```json
-{"role": "shortcut", "settle_ms": 2000, "rearm_ms": 3000, "off_after_s": 0, "rx_wd_s": 0,
- "name": "Guest bath shortcut", "webhook": "http://…", "hue": true}
+{"role": "shortcut", "rx_wd_s": 0, "name": "Guest bath shortcut", "webhook": "http://…", "hue": true}
 ```
 
 | Key | Type and range | Default |
 |---|---|---|
 | `role` | `none`, `mirror`, `shortcut` | `none` |
-| `settle_ms` | 200–10000 | 2000 |
-| `rearm_ms` | 0–30000 | 3000 |
-| `off_after_s` | 0 or 10–3600 | 0 (never) |
 | `rx_wd_s` | 0 or 30–3600 | 0 (off) |
 | `name` | 1–40 characters | `Zigbee Anthema <id>` |
 | `webhook` | empty, or an `http://` or `https://` URL of at most 159 characters in all, not ending in `/`; or the literal `"-"` to clear | empty |
@@ -273,7 +269,7 @@ The client says the shortcut has run; the board reports Off so the Zigbee contro
   slot's `esp_app_desc_t`: `project_name` must equal **the running image's own name**, not a fixed one, so
   each image accepts only its own kind (`409 wrong_firmware`, whose message names both). A rejected slot is
   simply left; the next update overwrites it. Then it sets the boot partition, answers `200 {"ok": true,
-  "version": "0.7.0"}` (the new image's) and reboots after 2 s; the stream's last change carries `rebooting` and
+  "version": "0.8.0"}` (the new image's) and reboots after 2 s; the stream's last change carries `rebooting` and
   `version`, then `event: end`. A body that ends early is `400 bad_request`; a flash write or boot-partition
   failure is `500 internal`.
 - The first-start check requires Wi-Fi, HTTP **and Zigbee back on the network** within the verification
@@ -347,6 +343,7 @@ first has it.
 | 0.5.2 | `409 rejoining`: a board with a stored network is never steered |
 | 0.6.0 | `POST /update` with the SHA and the project check, Zigbee in the first-start check; `off_after_s` defaults to 0; a double blink after a client's release (`blink_ms`), removed again in 0.7.0 |
 | 0.7.0 | the rename (`_zigbee-anthema._tcp`, the default name `Zigbee Anthema <id>`, the hotspot `Zigbee-Anthema-<id>`, `"api"` and `"zigbee"` in place of the earlier client and controller values, the state's `controller` object in place of the earlier one, `controller_command_3s` in place of the earlier ignored value, the log tags `API-SET`, `API-RELEASE` and `WEBHOOK`); the update stream ends with `rebooting` and `version`, and the restart waits 2 s; the colour LED's cues and identify's `rgb`; the `hue` setting; the neutral identity and the chip's own IEEE address; one pairing QR; `blink_ms` gone |
+| 0.8.0 | the shortcut button's three timing settings gone (a `PUT` naming one is refused whole); a press is pushed at once, at the first command that turns the group on, and held until it is released; `button.release_by` and the webhook's `by` are never `timeout` |
 
 **Compatibility note.** Boards before 0.7.0 wrote `"ha"` in three places: `light.by`, `button.release_by` and
 the webhook's `by`; from 0.7.0 they write `"api"`. They also wrote `"hub"` where the Zigbee controller made the
@@ -354,4 +351,6 @@ change, in the same three places; from 0.7.0 they write `"zigbee"`. And they nam
 key of its `change` events, `"hub"`; from 0.7.0 it is `"controller"`. `POST /light`'s echo-window answer
 `"ignored": "hub_command_3s"` is `"controller_command_3s"` from 0.7.0. A client that must work with both
 accepts both spellings of each. A `PUT /settings` naming a key the board does not know is refused whole, so send
-`blink_ms` only to 0.6.0 and `hue` only to 0.7.0 and later.
+`blink_ms` only to 0.6.0 and `hue` only to 0.7.0 and later. From 0.8.0 the shortcut button's three timing
+settings are gone, so send them only to 0.7.0 and earlier; and `button.release_by` and the webhook's `by` are
+never `timeout`.

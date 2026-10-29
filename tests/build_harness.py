@@ -13,7 +13,7 @@ What 0.4.0 changed here: the role is a runtime setting (cfg_live.role), so there
 probes set the role; the settings store (settings.c) and bulb_role_switch/ieee_from_mac are extracted too;
 zb_task's address block is extracted by marker into a small wrapper (zb_address_path) for the IEEE probes.
 
-The harness binary takes one argument: old (the 21 probes of 0.3.24, role shortcut), old-normal (the one
+The harness binary takes one argument: old (the 16 probes of 0.3.24 that 0.8.0 keeps, role shortcut), old-normal (the one
 normal-mode probe, role mirror) or new (the 0.4.0 probes).
 """
 import os
@@ -26,8 +26,8 @@ BULB = Path(sys.argv[1] if len(sys.argv) > 1 else C6 / 'bulb/main/bulb.c')
 SETT = Path(sys.argv[2] if len(sys.argv) > 2 else C6 / 'bulb/main/api/v1/settings.c')
 HDR = Path(sys.argv[3]) if len(sys.argv) > 3 else SETT.with_name('settings.h')
 OUT = Path(os.environ.get('HARNESS_OUT', '/tmp/c6-harness-3.0'))
-KC_BULB = Path(os.environ.get('KCONFIG_BULB') or SETT.parent.parent.parent / 'Kconfig.projbuild')    # 0.6.0: the defaults the harness uses ARE the Kconfig ones,
-KC_BASE = Path(os.environ.get('KCONFIG_BASE') or Path(os.environ.get('C6_COMP') or C6 / 'components/c6_base') / 'Kconfig')                  # so a mutation of a default in a copy reaches the probes
+# 0.6.0: the defaults the harness uses ARE the Kconfig ones, so a mutation of a default in a copy reaches the probes
+KC_BASE = Path(os.environ.get('KCONFIG_BASE') or Path(os.environ.get('C6_COMP') or C6 / 'components/c6_base') / 'Kconfig')
 
 
 def kdefault(path, symbol):
@@ -114,7 +114,7 @@ def zb_pan_path():
 # ---- extraction, in dependency order: cfg_t, bulb's declarations, settings.c, bulb's functions
 types = [block(hdr, r'^enum \{ CFG_ROLE_NONE', r'^\} cfg_t;', 'settings.h cfg_t')]
 decls = [block(bulb, r'^#define EP ', r'^#define EP ', 'EP'),
-         block(bulb, r'^enum \{ L_ON, L_LEVEL', r'^#define BUTTON_RETRY_US', 'light state + globals')]
+         block(bulb, r'^enum \{ L_ON, L_LEVEL', r'follow L_\*"\);', 'light state + globals')]
 SETT_FUNCS = ['cfg_num_get', 'cfg_num_set', 'cfg_num_ok', 'cfg_role_name', 'cfg_role_parse', 'cfg_webhook_ok',
               'cfg_mask_webhook', 'cfg_ext_pan_ok', 'cfg_name_ok', 'cfg_default_name',
               'cfg_key_list', 'cfg_parse_item', 'cfg_nesting_ok', 'cfg_parse', 'cfg_load', 'cfg_get', 'cfg_role',
@@ -142,8 +142,7 @@ BULB_FUNCS = ['light_mark_changed_locked', 'light_by_of', 'light_release_by_of',
               'zigbee_pair_post', 'zigbee_leave_post', 'zigbee_erase_post', 'erase_task', 'erase_post', 'color_shape', 'create_device']
 bparts = [func(bulb, f, 'bulb.c') for f in BULB_FUNCS] + [zb_address_path(), zb_pan_path()]
 bparts.append(block(bulb, r'^#if CONFIG_C6_ZB_PROFILE_SENGLED_E11$', r'^#endif', 'bulb.c profile block'))   # PROFILE_* macros, custom_noop, sengled_e11_extras (E11) or the Kconfig strings (neutral)
-for name in ('webhook_post_to', 'button_post', 'button_light_apply',
-             'bulb_settings_changed_locked', 'bulb_settings_changed'):
+for name in ('webhook_post_to', 'button_post'):
     bparts += optional_func(bulb, name, 'bulb.c')
 bparts.sort(key=lambda t: t[0])
 cat = lambda parts: '\n'.join(t for _, t in parts)
@@ -268,8 +267,7 @@ board_probes += 'static void run_board(void) {\n    board_hooks();\n' + ''.join(
 NOWARN = ('#pragma GCC diagnostic push\n#pragma GCC diagnostic ignored "-Wunused-function"\n'
           '#pragma GCC diagnostic ignored "-Wunused-parameter"\n#pragma GCC diagnostic ignored "-Wunused-variable"\n')
 extracted = (generation_macro + cat(decls) + '\n'
-             + 'esp_err_t bulb_role_switch(const cfg_t *next, uint32_t keys);\n'
-             + 'void bulb_settings_changed_locked(uint32_t keys);\nvoid bulb_settings_changed(void);\n\n'
+             + 'esp_err_t bulb_role_switch(const cfg_t *next, uint32_t keys);\n\n'
              + cat(sparts) + '\n' + NOWARN + '\n'.join(new_text) + base_extra + '\n#pragma GCC diagnostic pop\n' + cat(bparts))
 
 pre = r'''
@@ -288,16 +286,12 @@ static int g_json_parses = 0;                       /* parser calls by firmware 
 #define cJSON_Parse(s) (g_json_parses++, cJSON_Parse(s))
 #define cJSON_ParseWithOpts(s, end, full) (g_json_parses++, cJSON_ParseWithOpts(s, end, full))
 #define CONFIG_C6_ZB_ENDPOINT 1
-#define CONFIG_C6_BUTTON_SETTLE_MS 2000
-#define CONFIG_C6_BUTTON_OFF_AFTER_S @@OFF_AFTER_S@@          /* the Kconfig default (0 since 0.6.0), read from Kconfig.projbuild by build_harness.py */
 #define HX_STR(x) #x
 #define HX_XSTR(x) HX_STR(x)
-#define HARNESS_OFF_AFTER_S 120                  /* what reset_case() starts a probe with: 0.5.2's timeout, which the 134 old probes were written for */
 #define CONFIG_C6_VERIFY_TIMEOUT_S @@VERIFY_TIMEOUT_S@@
 #define CONFIG_C6_VERIFY_STABLE_S @@VERIFY_STABLE_S@@
 #define CONFIG_C6_VERIFY_ZIGBEE_S @@VERIFY_ZIGBEE_S@@
 #define CONFIG_C6_VERIFY_BREAK_TEST 0            /* a preprocessor #if in c6_base_zigbee_ready: the break build is a second copy of it (brk_), compiled with 1 */
-#define CONFIG_C6_BUTTON_REARM_MS 3000
 #define CONFIG_C6_ZB_RX_WATCHDOG_S 0
 #define CONFIG_C6_ZB_REPORT_LEVEL_CT 0
 #define CONFIG_C6_ZB_REPORT_DST_EP 1
@@ -440,8 +434,7 @@ static int64_t fake_now = 10000000;
 static int g_timer_calls = 0, g_delays = 0;
 static jmp_buf loop_done;
 static int g_h_push, g_h_button, g_notify_push, g_notify_button, g_notify_pass;
-static void (*g_delay_hook)(void), (*g_wait_hook)(void);
-static int g_wait_budget, g_wait_wakes;             /* opt-in blocked-task simulation; ordinary probes still step with longjmp */
+static void (*g_delay_hook)(void);
 static int64_t esp_timer_get_time(void) {if (++g_timer_calls > 1000000) {puts("runaway loop"); exit(2);} return fake_now;}
 static int g_delay_budget = -1;                    /* >= 0: a task loop's vTaskDelay returns that many times, then leaves the loop (watchdog_task, btn_task) */
 static void vTaskDelay(unsigned ms) {
@@ -455,15 +448,7 @@ static void xTaskNotifyGive(void *t) {CRIT_CALL_NOTIFY(); if (t == &g_h_push) g_
 static unsigned ulTaskNotifyTake(int clear, unsigned wait) {
     (void)clear;
     if (g_notify_pass > 0) {g_notify_pass--; return 1;}
-    if (g_wait_budget > 0 && wait != portMAX_DELAY) {
-        g_wait_budget--;
-        int64_t deadline = fake_now + (int64_t)wait * 1000;
-        int notified = g_notify_button;
-        if (g_wait_hook) {void (*h)(void) = g_wait_hook; g_wait_hook = NULL; h();}
-        if (g_notify_button != notified) g_wait_wakes++;
-        else if (fake_now < deadline) fake_now = deadline;
-        return 1;
-    }
+    (void)wait;
     longjmp(loop_done, 1);
 }
 
@@ -647,15 +632,14 @@ static int g_mode_role = CFG_ROLE_NONE;                           /* the role re
 static void reset_case(void) {
     s_light = (light_state_t){.seen = 1u << L_ON, .val = {[L_ON] = 1}};
     s_hub = s_light; s_zb_up = true; s_held = false; s_delivering = false;
-    s_press_at_us = s_press_first_us = s_off_at_us = s_released_at_us = s_hub_cmd_us = s_push_due_us = 0;
+    s_press_pending = false; s_hub_cmd_us = s_push_due_us = 0;
     s_light_changed_us = 0; s_light_gen = s_saved_gen = 0; s_release_by = NULL; s_restored_at_us = 0;
 #ifdef HARNESS_BUTTON_GENERATION
-    s_button_generation = 0; s_held_at_us = 0;
+    s_button_generation = 0;
 #endif
     s_restore_guard = 0; s_restart_for_stall = false; s_push_task = &g_h_push; s_button_task = &g_h_button;
     g_notify_push = g_notify_button = g_notify_pass = 0;
-    cfg_live = (cfg_t){.role = (uint8_t)g_mode_role, .settle_ms = CONFIG_C6_BUTTON_SETTLE_MS, .rearm_ms = CONFIG_C6_BUTTON_REARM_MS,
-                       .off_after_s = HARNESS_OFF_AFTER_S, .rx_wd_s = CONFIG_C6_ZB_RX_WATCHDOG_S, .hue = true};
+    cfg_live = (cfg_t){.role = (uint8_t)g_mode_role, .rx_wd_s = CONFIG_C6_ZB_RX_WATCHDOG_S, .hue = true};
     snprintf(cfg_live.webhook, sizeof cfg_live.webhook, "%s", WH_TEST);
     kv_clear(); g_kconfig_ieee = ""; g_kconfig_ext_pan[0] = 0; g_kconfig_ota_token = ""; board_reset(); claim_now();
     g_off_sets = 0; g_role_at_off = g_model_on_at_role_store = -1; g_nlogs = 0; g_http_inits = 0;
@@ -664,7 +648,7 @@ static void reset_case(void) {
     g_set_fail_on_off = 0; g_post_fail_n = 0; report_update_err = 0;
     fake_now = 10000000; model_on = 1;
     save_calls = commit_calls = save_error = 0; g_nposts = g_press_posts = g_release_posts = 0; g_delays = 0;
-    g_delay_hook = g_wait_hook = NULL; g_wait_budget = g_wait_wakes = 0;
+    g_delay_hook = NULL;
     reports_left = 1; report_starts = 0; g_aps_tx = 0;
 }
 static void run_button(void) {if (!setjmp(loop_done)) button_task(NULL);}
@@ -696,9 +680,7 @@ static void inject_hub_off(void) {
     s_light.val[L_ON] = 0; s_light.seen |= 1u << L_ON; light_mark_changed_locked(now, "zigbee");
     portEXIT_CRITICAL(&s_light_mux);
 }
-static int64_t g_off_time;
 static void inject_hub_off_then_on(void) {      /* the touchscreen clears, and 100 ms later a new press starts */
-    g_off_time = esp_timer_get_time();
     inject_hub_off();
     fake_now += 100000;
     inject_hub_on();
@@ -724,43 +706,24 @@ static void sanity_probe(void) {
 }
 
 @@BOARD_PROBES@@
-/* ===================================================================== the 21 probes of 0.3.24 */
+/* ===================================================================== the 16 probes of 0.3.24 that 0.8.0 keeps (1, 2, e, N1 and N2 tested the timers and are gone; their ids are not reused) */
 static void run_old(void) {
-    puts("==== The nine button probes, on 0.3.24 ====");
+    puts("==== The button probes of 0.3.24 that 0.8.0 keeps ====");
 
-    /* 1. timeout, lock failure */
-    reset_case(); s_held = true; s_off_at_us = fake_now; lock_ok = false; run_button();
-    printf("1 timeout lock failure: held=%d, timer_in=%lld ms, model_on=%d, release_posts=%d\n", s_held, (long long)((s_off_at_us - fake_now) / 1000), model_on, g_release_posts);
-    CHECK(s_held); CHECK(s_off_at_us == fake_now + BUTTON_RETRY_US); CHECK(model_on == 1); CHECK(g_release_posts == 0);
-    lock_ok = true; fake_now += BUTTON_RETRY_US; run_button();
-    printf("  then lock back, retry fires: model_on=%d, held=%d, timer=%lld, release_posts=%d (%s)\n", model_on, s_held, (long long)s_off_at_us, g_release_posts, g_nposts ? g_posts[0] : "-");
-    CHECK(model_on == 0 && !s_held && !s_off_at_us && g_release_posts == 1 && post_has(0, "\"by\":\"timeout\""));
-    verdict("1", "timeout lock failure: press held, retry timer, no release webhook");
-
-    /* 2. late release, lock failure */
-    reset_case(); s_released_at_us = 7000000; s_press_first_us = 7100000; s_press_at_us = 7100000; lock_ok = false; run_button();
-    printf("2 late lock failure: held=%d, timer_in=%lld ms, press_due=%lld, model_on=%d, press_posts=%d\n", s_held, (long long)((s_off_at_us - fake_now) / 1000), (long long)s_press_at_us, model_on, g_press_posts);
-    CHECK(!s_held); CHECK(s_off_at_us == fake_now + BUTTON_RETRY_US); CHECK(!s_press_at_us); CHECK(model_on == 1); CHECK(g_press_posts == 0);
-    lock_ok = true; fake_now += BUTTON_RETRY_US; run_button();
-    printf("  then lock back, retry fires: model_on=%d, timer=%lld, posts=%d\n", model_on, (long long)s_off_at_us, g_nposts);
-    CHECK(model_on == 0 && !s_off_at_us && g_nposts == 0);
-    verdict("2", "late lock failure: retry timer set, retried to Off, no webhook");
-
-    /* 3. Zigbee controller On injected at lock release */
-    reset_case(); s_held = true; s_off_at_us = fake_now + 120000000; g_unlock_hook = inject_hub_on;
+    /* 3. Zigbee controller On injected at lock release: pushed at once, no quiet time, nothing dropped as late */
+    reset_case(); s_held = true; g_unlock_hook = inject_hub_on;
     { int want[L_COUNT]; char msg[120]; want_off(want); CHECK(light_apply(want, "API-SET", msg, sizeof msg, true, NULL) >= 0); }
-    printf("3 Zigbee controller On at lock release: model_on=%d, shadow_on=%u, hub_on=%u, held=%d, press_due=%s, off_due=%lld, gen=%u saved=%u\n",
-           model_on, s_light.val[L_ON], s_hub.val[L_ON], s_held, s_press_at_us ? "queued" : "0", (long long)s_off_at_us, s_light_gen, s_saved_gen);
+    printf("3 Zigbee controller On at lock release: model_on=%d, shadow_on=%u, hub_on=%u, held=%d, pending=%d, gen=%u saved=%u\n",
+           model_on, s_light.val[L_ON], s_hub.val[L_ON], s_held, s_press_pending, s_light_gen, s_saved_gen);
     CHECK(model_on == 1 && s_light.val[L_ON] == 1 && s_hub.val[L_ON] == 1);     /* shared state agrees with the model */
-    CHECK(!s_held && !s_off_at_us);                                                /* our Off released the old press */
-    CHECK(s_press_at_us != 0);                                                     /* the Zigbee controller's On was not erased by a stale write */
+    CHECK(!s_held);                                                                /* our Off released the old press */
+    CHECK(s_press_pending);                                                        /* the Zigbee controller's On was not erased by a stale write */
     CHECK(s_light_gen != s_saved_gen);                                             /* and is dirty for the next save */
-    run_button();                                    /* not settled yet: nothing happens */
-    CHECK(model_on == 1 && g_nposts == 0);
-    fake_now += 2100000; run_button();               /* settled, but within REARM of our release: BUTTON-LATE */
-    printf("  after settle (On arrived 0 ms after the release, inside the %d ms re-arm window): model_on=%d, posts=%d\n", CONFIG_C6_BUTTON_REARM_MS, model_on, g_nposts);
-    CHECK(g_nposts == 0 && model_on == 0 && s_light.val[L_ON] == 0);
-    verdict("3", "Zigbee controller On at lock release: model, shadow, Zigbee controller agree; press not clobbered");
+    run_button();                                    /* no quiet time: the press is pushed at once */
+    printf("  after one pass of the task (the On arrived 0 ms after the release): model_on=%d, posts=%d, press_posts=%d, held=%d, pending=%d\n", model_on, g_nposts, g_press_posts, s_held, s_press_pending);
+    CHECK(g_nposts == 1 && g_press_posts == 1 && post_has(0, "\"press\":1") && s_held && !s_press_pending);
+    CHECK(model_on == 1 && s_light.val[L_ON] == 1);                                /* and nothing turned it off again */
+    verdict("3", "Zigbee controller On at lock release: model, shadow, Zigbee controller agree; press not clobbered, pushed at once with no quiet time and nothing dropped as late");
 
     /* 4. NVS open fails once */
     reset_case(); portENTER_CRITICAL(&s_light_mux); light_mark_changed_locked(1000000, "zigbee"); portEXIT_CRITICAL(&s_light_mux);
@@ -776,39 +739,39 @@ static void run_old(void) {
     /* 5. HTTP on=1 in button mode */
     reset_case(); s_light.val[L_ON] = s_hub.val[L_ON] = 0; model_on = 0;
     { httpd_req_t r = {.on = "1"}; CHECK(light_post(&r) == 0);
-      printf("5 button HTTP on=1: model_on=%d, held=%d, press_due=%lld, off_due=%lld, response=%s", model_on, s_held, (long long)s_press_at_us, (long long)s_off_at_us, r.response);
-      CHECK(!model_on && !s_held && !s_press_at_us && !s_off_at_us && strstr(r.response, "ignored"));
+      printf("5 button HTTP on=1: model_on=%d, held=%d, pending=%d, response=%s", model_on, s_held, s_press_pending, r.response);
+      CHECK(!model_on && !s_held && !s_press_pending && strstr(r.response, "ignored"));
       r = (httpd_req_t){.on = "0"}; CHECK(light_post(&r) == 0 && strstr(r.response, "no press to release"));
       s_held = true; s_light.val[L_ON] = s_hub.val[L_ON] = 0; model_on = 0;                   /* even with a press held */
       r = (httpd_req_t){.on = "1"}; CHECK(light_post(&r) == 0 && strstr(r.response, "on=0 only") && !model_on && s_held); }
     verdict("5", "button on=1 rejected, model unchanged");
 
     /* 6. client release before press delivery (the press is still being posted) */
-    reset_case(); s_press_at_us = s_press_first_us = 7000000; g_press_hook = client_off_during_press_post; run_button();
+    reset_case(); s_press_pending = true; g_press_hook = client_off_during_press_post; run_button();
     printf("6 client release before press delivery: posts=%d [", g_nposts);
     for (int i = 0; i < g_nposts; i++) printf("%s%s", i ? " | " : "", g_posts[i]);
-    printf("], model_on=%d, held=%d, delivering=%d, off_due=%lld\n", model_on, s_held, s_delivering, (long long)s_off_at_us);
+    printf("], model_on=%d, held=%d, delivering=%d, pending=%d\n", model_on, s_held, s_delivering, s_press_pending);
     CHECK(g_nposts == 2 && post_has(0, "\"press\":1") && post_has(1, "\"release\":1") && post_has(1, "\"by\":\"api\""));
     CHECK(g_press_posts == 1 && g_release_posts == 1);
-    CHECK(!model_on && !s_held && !s_delivering && !s_off_at_us && !s_release_by);
+    CHECK(!model_on && !s_held && !s_delivering && !s_press_pending && !s_release_by);
     verdict("6", "press webhook then one release webhook by api");
 
     /* 7. truncated MoveToLevelWithOnOff (decoder) */
     reset_case(); s_light.val[L_ON] = s_hub.val[L_ON] = 0;
     { static const uint8_t trunc[] = {1, 1, 4, 254}; ctl(8, trunc, sizeof trunc);
-      printf("7 truncated MoveToLevelWithOnOff: hub_on=%u, hub_level_seen=%d, press_due=%lld\n", s_hub.val[L_ON], !!(s_hub.seen & (1u << L_LEVEL)), (long long)s_press_at_us);
-      CHECK(!s_hub.val[L_ON] && !(s_hub.seen & (1u << L_LEVEL)) && !s_press_at_us && !s_hub_cmd_us);
+      printf("7 truncated MoveToLevelWithOnOff: hub_on=%u, hub_level_seen=%d, pending=%d\n", s_hub.val[L_ON], !!(s_hub.seen & (1u << L_LEVEL)), s_press_pending);
+      CHECK(!s_hub.val[L_ON] && !(s_hub.seen & (1u << L_LEVEL)) && !s_press_pending && !s_hub_cmd_us);
       static const uint8_t full[] = {1, 1, 4, 254, 0, 0}; ctl(8, full, sizeof full);       /* control: the complete command works */
-      CHECK(s_hub.val[L_ON] == 1 && s_hub.val[L_LEVEL] == 254 && s_press_at_us); }
+      CHECK(s_hub.val[L_ON] == 1 && s_hub.val[L_LEVEL] == 254 && s_press_pending); }
     verdict("7", "truncated MoveToLevelWithOnOff ignored (complete one still accepted)");
 
     /* 8. manufacturer-specific frame (decoder) */
     reset_case(); s_light.val[L_ON] = s_hub.val[L_ON] = 0;
     { static const uint8_t vendor[] = {5, 0x34, 0x12, 1, 1}; ctl(6, vendor, sizeof vendor);
-      printf("8 manufacturer 0x1234 cmd 1: hub_on=%u, press_due=%lld\n", s_hub.val[L_ON], (long long)s_press_at_us);
-      CHECK(!s_hub.val[L_ON] && !s_press_at_us && !s_hub_cmd_us);
+      printf("8 manufacturer 0x1234 cmd 1: hub_on=%u, pending=%d\n", s_hub.val[L_ON], s_press_pending);
+      CHECK(!s_hub.val[L_ON] && !s_press_pending && !s_hub_cmd_us);
       static const uint8_t std_on[] = {1, 1, 1}; ctl(6, std_on, sizeof std_on);             /* control */
-      CHECK(s_hub.val[L_ON] == 1 && s_press_at_us); }
+      CHECK(s_hub.val[L_ON] == 1 && s_press_pending); }
     verdict("8", "manufacturer-specific On frame ignored (standard On still accepted)");
 
     /* 9. remove=1 */
@@ -848,15 +811,15 @@ static void run_old(void) {
     reset_case(); s_light.val[L_ON] = s_hub.val[L_ON] = 0;
     { static const uint8_t on[] = {1, 1, 1};
       hub_send(6, on, sizeof on, 1, EZB_ADDR_MODE_SHORT, 0x0000);   /* APS status != 0 */
-      int a = s_hub.val[L_ON] || s_press_at_us || s_hub_cmd_us;
+      int a = s_hub.val[L_ON] || s_press_pending || s_hub_cmd_us;
       hub_send(6, on, sizeof on, 0, EZB_ADDR_MODE_SHORT, 0x1234);   /* another node */
-      int b = s_hub.val[L_ON] || s_press_at_us || s_hub_cmd_us;
+      int b = s_hub.val[L_ON] || s_press_pending || s_hub_cmd_us;
       hub_send(6, on, sizeof on, 0, EZB_ADDR_MODE_IEEE, 0x0000);    /* not a short address */
-      int c = s_hub.val[L_ON] || s_press_at_us || s_hub_cmd_us;
+      int c = s_hub.val[L_ON] || s_press_pending || s_hub_cmd_us;
       printf("b status!=0 acted=%d, src 0x1234 acted=%d, src IEEE-mode acted=%d\n", a, b, c);
       CHECK(!a && !b && !c);
       hub_send(6, on, sizeof on, 0, EZB_ADDR_MODE_SHORT, 0x0000);   /* control */
-      CHECK(s_hub.val[L_ON] == 1 && s_press_at_us); }
+      CHECK(s_hub.val[L_ON] == 1 && s_press_pending); }
     verdict("b", "non-coordinator source or APS status != 0 ignored");
 
     /* c. OnWithTimedOff 0x42 */
@@ -864,13 +827,13 @@ static void run_old(void) {
       static const uint8_t unconditional[]  = {1, 1, 0x42, 0x00, 0x10, 0x00, 0x20, 0x00};
       static const uint8_t short42[]        = {1, 1, 0x42, 0x01};
       reset_case(); s_light.val[L_ON] = s_hub.val[L_ON] = 0; ctl(6, accept_only_on, sizeof accept_only_on);
-      int off_ok = !s_hub.val[L_ON] && !s_press_at_us && !s_hub_cmd_us;
+      int off_ok = !s_hub.val[L_ON] && !s_press_pending && !s_hub_cmd_us;
       reset_case(); ctl(6, accept_only_on, sizeof accept_only_on);
       int on_ok = s_hub.val[L_ON] == 1;
       reset_case(); s_light.val[L_ON] = s_hub.val[L_ON] = 0; ctl(6, unconditional, sizeof unconditional);
-      int uncond_ok = s_hub.val[L_ON] == 1 && s_press_at_us;
+      int uncond_ok = s_hub.val[L_ON] == 1 && s_press_pending;
       reset_case(); s_light.val[L_ON] = s_hub.val[L_ON] = 0; ctl(6, short42, sizeof short42);
-      int short_ok = !s_hub.val[L_ON] && !s_press_at_us;
+      int short_ok = !s_hub.val[L_ON] && !s_press_pending;
       printf("c 0x42 accept-only-when-on: while off discarded=%d, while on stays on=%d; unconditional while off turns on=%d; truncated ignored=%d\n", off_ok, on_ok, uncond_ok, short_ok);
       CHECK(off_ok && on_ok && uncond_ok && short_ok); }
     verdict("c", "OnWithTimedOff: accept-only-when-on honoured");
@@ -878,89 +841,34 @@ static void run_old(void) {
     /* d. toggle */
     { static const uint8_t tog[] = {1, 1, 2};
       reset_case(); s_light.val[L_ON] = s_hub.val[L_ON] = 0; ctl(6, tog, sizeof tog);
-      int t1 = s_hub.val[L_ON] == 1 && s_press_at_us;
+      int t1 = s_hub.val[L_ON] == 1 && s_press_pending;
       ctl(6, tog, sizeof tog);
-      int t2 = s_hub.val[L_ON] == 0 && !s_press_at_us;
-      reset_case(); s_held = true; s_off_at_us = fake_now + 1; ctl(6, tog, sizeof tog);        /* toggling a held press releases it */
-      int t3 = s_hub.val[L_ON] == 0 && !s_held && !s_off_at_us && s_release_by && !strcmp(s_release_by, "zigbee");
+      int t2 = s_hub.val[L_ON] == 0 && !s_press_pending;
+      reset_case(); s_held = true; ctl(6, tog, sizeof tog);        /* toggling a held press releases it */
+      int t3 = s_hub.val[L_ON] == 0 && !s_held && s_release_by && !strcmp(s_release_by, "zigbee");
       reset_case(); s_hub.seen = 0; s_light.val[L_ON] = 0; ctl(6, tog, sizeof tog);              /* no Zigbee controller history yet: starts from s_light */
       int t4 = s_hub.val[L_ON] == 1;
       printf("d toggle: off->on=%d, on->off=%d, toggle of held press -> release by Zigbee controller=%d, first command starts from s_light=%d\n", t1, t2, t3, t4);
       CHECK(t1 && t2 && t3 && t4); }
     verdict("d", "toggle (0x02) still resolves correctly");
 
-    /* e. attribute setter failure for On/Off in a timeout */
-    reset_case(); s_held = true; s_off_at_us = fake_now; g_set_fail_on_off = 1;
-    run_button();
-    printf("e setter fails in timeout: held=%d, timer_in=%lld ms, model_on=%d, shadow_on=%u, hub_on=%u, release_posts=%d\n", s_held, (long long)((s_off_at_us - fake_now) / 1000), model_on, s_light.val[L_ON], s_hub.val[L_ON], g_release_posts);
-    CHECK(s_held && s_off_at_us == fake_now + BUTTON_RETRY_US && model_on == 1 && s_light.val[L_ON] == 1 && s_hub.val[L_ON] == 1 && g_release_posts == 0);
-    { int want[L_COUNT]; char msg[120]; want_off(want); int rc = light_apply(want, "T", msg, sizeof msg, true, NULL);
-      printf("  light_apply directly: rc=%d msg=\"%s\"\n", rc, msg); CHECK(rc == -2 && strstr(msg, "on=0(0x86)")); }
-    { httpd_req_t r = {.on = "0"}; light_post(&r);                                     /* a client's own Off while the setter refuses */
-      printf("  client on=0 while the setter refuses: http=%d held=%d (%s)", r.code, s_held, r.response);
-      CHECK(r.code == 500 && s_held && model_on == 1 && g_release_posts == 0); }
-    g_set_fail_on_off = 0; fake_now += BUTTON_RETRY_US; run_button();
-    printf("  setter back, retry fires: model_on=%d, held=%d, release_posts=%d\n", model_on, s_held, g_release_posts);
-    CHECK(model_on == 0 && !s_held && g_release_posts == 1 && post_has(g_nposts - 1, "\"by\":\"timeout\""));
-    verdict("e", "setter failure in a timeout: press held, retry scheduled, no release until it works");
-
-    puts("==== Race probes (N1, N2, N5) ====");
-
-    /* N1. timeout's apply fails on the lock; a Zigbee controller Off is processed before the re-arm */
-    reset_case(); s_held = true; s_off_at_us = fake_now; lock_ok = false; g_acquire_hook = inject_hub_off;
-    int64_t t_off = fake_now;
-    run_button();
-    printf("N1 timeout apply fails on lock, Zigbee controller Off meanwhile: held=%d, retry_timer=%lld, released_at_moved=%d, posts=%d [%s], model_on=%d\n",
-           s_held, (long long)s_off_at_us, s_released_at_us != t_off, g_nposts, g_nposts ? g_posts[0] : "-", model_on);
-    CHECK(!s_held && !s_off_at_us && s_released_at_us == t_off);
-    CHECK(g_nposts == 1 && post_has(0, "\"by\":\"zigbee\"") && !post_has(0, "timeout"));
-    lock_ok = true; fake_now += 5500000; int sets0 = g_set_calls; run_button();       /* well past where a retry would have fired */
-    printf("  5.5 s later: retry ran=%d, released_at_moved=%d, posts=%d\n", g_set_calls != sets0, s_released_at_us != t_off, g_nposts);
-    CHECK(g_set_calls == sets0 && s_released_at_us == t_off && g_nposts == 1);
-    { static const uint8_t on[] = {1, 1, 1};
-      ctl(6, on, sizeof on); fake_now += 2100000; run_button();                          /* a genuine On, 5.5 s after the Zigbee controller Off */
-      printf("  genuine Zigbee controller On 5.5 s after the Off: press_posts=%d, model_on=%d, held=%d\n", g_press_posts, model_on, s_held);
-      CHECK(g_press_posts == 1 && s_held); }
-    /* literal reading: the On only 1 s after the Zigbee controller Off (inside the 3 s re-arm window) */
-    reset_case(); s_held = true; s_off_at_us = fake_now; lock_ok = false; g_acquire_hook = inject_hub_off; run_button();
-    { static const uint8_t on[] = {1, 1, 1}; lock_ok = true; fake_now += 1000000; inject_hub_on(); (void)on; fake_now += 2100000; run_button();
-      printf("  [observation, not a check] Zigbee controller On 1 s after the Zigbee controller Off: press_posts=%d, model_on=%d (inside the %d ms re-arm window: BUTTON-LATE by design)\n", g_press_posts, model_on, CONFIG_C6_BUTTON_REARM_MS); }
-    /* a no-op Off (light already off, nothing held) must not restart the re-arm window; a real one does */
-    reset_case(); s_light.val[L_ON] = s_hub.val[L_ON] = 0; model_on = 0; s_released_at_us = 5000000;
-    { int want[L_COUNT]; char msg[60]; bool rel = true; want_off(want);
-      int rc = light_apply(want, "T", msg, sizeof msg, false, &rel);
-      printf("  no-op Off on an off light: rc=%d, released=%d, released_at_moved=%d\n", rc, rel, s_released_at_us != 5000000);
-      CHECK(rc >= 0 && !rel && s_released_at_us == 5000000);
-      s_light.val[L_ON] = s_hub.val[L_ON] = 1; model_on = 1; want_off(want);
-      rc = light_apply(want, "T", msg, sizeof msg, false, &rel);
-      printf("  real Off on an on light, nothing held: rc=%d, released=%d, released_at_moved=%d\n", rc, rel, s_released_at_us != 5000000);
-      CHECK(rc >= 0 && !rel && s_released_at_us == fake_now && !model_on); }
-    verdict("N1", "no retry armed after a Zigbee controller Off; released_at untouched; later genuine On is pushed");
-
-    /* N2. timeout decided while held; a Zigbee controller Off releases the press before light_apply takes the lock */
-    reset_case(); s_held = true; s_off_at_us = fake_now; g_acquire_hook = inject_hub_off; run_button();
-    printf("N2 Zigbee controller Off before the timeout's lock: posts=%d [", g_nposts);
-    for (int i = 0; i < g_nposts; i++) printf("%s%s", i ? " | " : "", g_posts[i]);
-    printf("], held=%d, model_on=%d, off_due=%lld\n", s_held, model_on, (long long)s_off_at_us);
-    CHECK(g_nposts == 1 && g_release_posts == 1 && post_has(0, "\"by\":\"zigbee\"") && !post_has(0, "timeout"));
-    CHECK(!s_held && !model_on && !s_off_at_us && !s_release_by);
-    verdict("N2", "exactly one release webhook, by Zigbee controller, no timeout push");
+    puts("==== Race probe (N5) ====");
 
     /* N5. client on=0 passes the early held check; a Zigbee controller Off (and a new press) comes before light_apply */
-    reset_case(); s_held = true; s_off_at_us = fake_now + 120000000; g_acquire_hook = inject_hub_off_then_on;
+    reset_case(); s_held = true; g_acquire_hook = inject_hub_off_then_on;
     { httpd_req_t r = {.on = "0"}; int rc = light_post(&r);
       printf("N5 client on=0 raced by Zigbee controller Off + new press: rc=%d http=%d response=%s", rc, r.code, r.response);
-      printf("   held=%d, press_due=%s, off_due=%lld, model_on=%d, released_at_is_hub_off=%d, set_calls=%d, posts=%d\n", s_held, s_press_at_us ? "queued" : "0", (long long)s_off_at_us, model_on, s_released_at_us == g_off_time, g_set_calls, g_nposts);
+      printf("   held=%d, pending=%d, model_on=%d, set_calls=%d, posts=%d\n", s_held, s_press_pending, model_on, g_set_calls, g_nposts);
       CHECK(rc == 0 && r.code == 200 && strstr(r.response, "ignored: no press to release"));
-      CHECK(!s_held && s_press_at_us == g_off_time + 100000 && s_press_first_us == g_off_time + 100000 && !s_off_at_us);
-      CHECK(model_on == 1 && s_light.val[L_ON] == 1 && s_released_at_us == g_off_time && g_set_calls == 0);
+      CHECK(!s_held && s_press_pending);
+      CHECK(model_on == 1 && s_light.val[L_ON] == 1 && g_set_calls == 0);
       CHECK(g_nposts == 0 && s_release_by && !strcmp(s_release_by, "zigbee")); }          /* only the Zigbee controller's own release is pending */
     verdict("N5", "light_apply -3 -> ignored: no press to release; pending new press untouched");
 
     puts("==== Extra checks ====");
 
     /* f. delivery policy: press never retried, release retried */
-    reset_case(); s_press_at_us = s_press_first_us = 7000000; g_post_fail_n = 5; run_button();
+    reset_case(); s_press_pending = true; g_post_fail_n = 5; run_button();
     int press_attempts = g_press_posts; int rel_before = g_release_posts;
     reset_case(); g_post_fail_n = 2; s_release_by = "zigbee"; run_button();
     printf("f press post fails: attempts=%d; release post fails twice: attempts=%d, delays=%d\n", press_attempts, g_release_posts, g_delays);
@@ -1013,28 +921,24 @@ static bool resp_has(const char *s) {return strstr(g_req.response, s) != NULL;}
 static bool nothing_written(void) {return g_cfg_sets == 0 && g_cfg_commits == 0 && g_kv[0].type == 0;}
 static void run_push(void) {g_notify_pass = 1; if (!setjmp(loop_done)) push_task(NULL); g_notify_pass = 0;}
 static bool is_defaults(const cfg_t *c) {
-    return c->role == CFG_ROLE_NONE && !c->webhook[0] && c->settle_ms == 2000 && c->rearm_ms == 3000 && c->off_after_s == CONFIG_C6_BUTTON_OFF_AFTER_S && c->rx_wd_s == 0 && c->stored == 0;   /* 0.6.0: the Kconfig default, 0 (was 120) */
+    return c->role == CFG_ROLE_NONE && !c->webhook[0] && c->rx_wd_s == 0 && c->stored == 0;
 }
 static bool same_cfg(const cfg_t *a, const cfg_t *b) {
-    return a->role == b->role && !strcmp(a->webhook, b->webhook) && a->settle_ms == b->settle_ms && a->rearm_ms == b->rearm_ms
-           && a->off_after_s == b->off_after_s && a->rx_wd_s == b->rx_wd_s && a->stored == b->stored;
-}
-static uint32_t num_by_name(const cfg_t *c, const char *k) {
-    return !strcmp(k, "settle_ms") ? c->settle_ms : !strcmp(k, "rearm_ms") ? c->rearm_ms : !strcmp(k, "off_after_s") ? c->off_after_s : c->rx_wd_s;
+    return a->role == b->role && !strcmp(a->webhook, b->webhook) && a->rx_wd_s == b->rx_wd_s && a->stored == b->stored;
 }
 static void junk_cfg(void) {
-    cfg_live = (cfg_t){.role = CFG_ROLE_SHORTCUT, .settle_ms = 1, .rearm_ms = 2, .off_after_s = 3, .rx_wd_s = 4, .stored = 0x3f};
+    cfg_live = (cfg_t){.role = CFG_ROLE_SHORTCUT, .rx_wd_s = 4, .stored = (1u << CFG_K_COUNT) - 1};
     snprintf(cfg_live.webhook, sizeof cfg_live.webhook, "http://junk/j");
 }
 static bool is_off_and_released(void) {
-    return !s_held && !s_delivering && !s_release_by && !s_press_at_us && !s_press_first_us && !s_released_at_us && !s_off_at_us && !s_push_due_us;
+    return !s_held && !s_delivering && !s_release_by && !s_press_pending && !s_push_due_us;
 }
 static void dirty_button_state(void) {
-    s_held = true; s_delivering = true; s_press_at_us = 111; s_press_first_us = 111; s_released_at_us = 222; s_off_at_us = 333;
+    s_held = true; s_delivering = true; s_press_pending = true;
     s_release_by = "zigbee"; s_push_due_us = 444;
 }
 static bool button_state_untouched(void) {
-    return s_held && s_delivering && s_press_at_us == 111 && s_press_first_us == 111 && s_released_at_us == 222 && s_off_at_us == 333
+    return s_held && s_delivering && s_press_pending
            && s_release_by && !strcmp(s_release_by, "zigbee") && s_push_due_us == 444;
 }
 #define WH_MASK "http://192.0.2.49:8123/api/webhook/c6_gfake_0123456789ab"    /* a made-up id */
@@ -1050,24 +954,6 @@ static void cr_switch_during_release_retry(void) {
     CHECK(put_body("{\"role\":\"none\",\"webhook\":\"http://h/new\"}") == 200);
     if (cr_return_to_shortcut) CHECK(put_body("{\"role\":\"shortcut\"}") == 200);
 }
-static int cr_put_status;
-static void cr_shorten_during_wait(void) {
-    fake_now += 100000;
-    cr_put_status = put_body("{\"settle_ms\":200}");
-}
-static void cr_stop_timed_wait(void) {g_wait_budget = 0;}
-static int64_t cr_hold(uint32_t off_after) {
-    reset_case(); set_role(CFG_ROLE_SHORTCUT); light_state(0);
-    cfg_live.off_after_s = off_after;
-    inject_hub_on(); fake_now += 2100000; run_button();
-    CHECK(s_held && g_press_posts == 1 && model_on == 1);
-    return fake_now;
-}
-static uint32_t cr_timeout_setting;
-static void cr_timeout_change_at_lock(void) {
-    char body[80]; snprintf(body, sizeof body, "{\"off_after_s\":%u}", cr_timeout_setting);
-    CHECK(put_body(body) == 200);
-}
 static int put_bytes(const char *body, size_t n) {
     g_req = (httpd_req_t){.body = body, .body_len = n, .content_len = n};
     settings_put(&g_req); return g_req.code;
@@ -1076,24 +962,18 @@ static int put_bytes(const char *body, size_t n) {
 static void run_code_review(void) {
     puts("==== regressions (cr1-cr7) ====");
 
-    /* cr1. Both timeout and late Off are canceled even after the role switches away and back. */
-    for (int late = 0; late < 2; late++) for (int back = 0; back < 2; back++) {
-        reset_case(); set_role(CFG_ROLE_SHORTCUT); cr_return_to_shortcut = back;
-        if (late) {
-            s_press_at_us = s_press_first_us = fake_now - 2100000;
-            s_released_at_us = s_press_first_us - 100000;
-        } else {
-            s_held = true; s_off_at_us = fake_now;
-        }
-        g_acquire_hook = cr_switch_and_on; run_button();
-        printf("cr1 %s, return-to-shortcut=%d: role=%s on=%d Off sets=%d pending=%lld releases=%d\n",
-               late ? "late" : "timeout", back, cfg_role_name(cfg_live.role), model_on, g_off_sets,
-               (long long)s_press_at_us, g_release_posts);
+    /* cr1. A role switch while a press is being posted cancels what was in flight and keeps a new Zigbee controller On, away and back. */
+    for (int back = 0; back < 2; back++) {
+        reset_case(); set_role(CFG_ROLE_SHORTCUT); light_state(0); cr_return_to_shortcut = back;
+        inject_hub_on(); g_press_hook = cr_switch_and_on; run_button();
+        printf("cr1 return-to-shortcut=%d: role=%s on=%d Off sets=%d held=%d pending=%d press posts=%d push_due=%s releases=%d\n",
+               back, cfg_role_name(cfg_live.role), model_on, g_off_sets, s_held, s_press_pending, g_press_posts,
+               s_push_due_us ? "set" : "0", g_release_posts);
         CHECK(cfg_live.role == (back ? CFG_ROLE_SHORTCUT : CFG_ROLE_MIRROR));
         CHECK(model_on == 1 && s_light.val[L_ON] == 1 && g_off_sets == 1 && g_release_posts == 0);
-        CHECK(back ? s_press_at_us != 0 : s_push_due_us != 0);
+        CHECK(back ? (g_press_posts == 2 && s_held && !s_press_pending) : (g_press_posts == 1 && !s_held && !s_press_pending && s_push_due_us != 0));
     }
-    verdict("cr1", "stale timeout/late Off preserves a new Zigbee controller On across role changes, including away and back");
+    verdict("cr1", "a role switch during a press post cancels the old press and keeps a new Zigbee controller On across role changes, including away and back");
 
     /* cr2. Path masking excludes slashes and repeated credentials in query/fragment text. */
     { const char *urls[] = {"http://h/api/webhook/0123456789ab?next=/ok",
@@ -1128,81 +1008,31 @@ static void run_code_review(void) {
     CHECK(g_release_posts == 3 && g_delays == 2 && !strcmp(g_last_url, WH_TEST));
     verdict("cr3", "release retries cancel after leaving shortcut, including away and back, while ordinary retries survive");
 
-    /* cr4. Changing settle while blocked must wake the existing task before its old timeout. */
-    reset_case(); set_role(CFG_ROLE_SHORTCUT); light_state(0); inject_hub_on();
-    { int64_t started = fake_now;
-      g_wait_hook = cr_shorten_during_wait; g_wait_budget = 2; g_press_hook = cr_stop_timed_wait;
-      run_button();
-      printf("cr4 settle2000->200 at +100ms: PUT=%d wakes=%d press at +%lldms posts=%d\n",
-             cr_put_status, g_wait_wakes, (long long)((fake_now - started) / 1000), g_press_posts);
-      CHECK(cr_put_status == 200 && g_wait_wakes == 1 && g_press_posts == 1 && s_held);
-      CHECK(fake_now - started >= 200000 && fake_now - started <= 201000); }
-    verdict("cr4", "shortening settle wakes a blocked task and delivers the pending press at the new deadline");
-
-    /* cr5. Live timeouts stay relative to when the press became held, including enabling from zero. */
-    { int64_t started = cr_hold(120), old_deadline = s_off_at_us;
-      fake_now = started + 5000000; int code = put_body("{\"off_after_s\":0}");
-      fake_now = old_deadline; run_button();
-      printf("cr5 disable held timeout: PUT=%d on at old deadline=%d held=%d releases=%d\n", code, model_on, s_held, g_release_posts);
-      CHECK(code == 200 && s_held && model_on == 1 && g_release_posts == 0); }
-    { const uint32_t initial[] = {0, 120};
-      for (size_t i = 0; i < sizeof initial / sizeof initial[0]; i++) {
-          int64_t started = cr_hold(initial[i]);
-          fake_now = started + 5000000; int code = put_body("{\"off_after_s\":10}");
-          int64_t deadline = s_off_at_us;
-          fake_now = started + 9999000; run_button(); CHECK(s_held && model_on == 1 && !g_release_posts);
-          fake_now = started + 10000000; run_button();
-          printf("cr5 %s at +5s: PUT=%d deadline=+%lldms on at +10s=%d releases=%d\n",
-                 initial[i] ? "shorten120->10" : "enable0->10", code,
-                 (long long)((deadline - started) / 1000), model_on, g_release_posts);
-          CHECK(code == 200 && deadline == started + 10000000 && !s_held && model_on == 0 && g_release_posts == 1);
-      } }
-    { int64_t started = cr_hold(10);
-      fake_now = started + 5000000; int code = put_body("{\"off_after_s\":20}");
-      int64_t deadline = s_off_at_us;
-      fake_now = started + 10000000; run_button(); CHECK(s_held && model_on == 1 && !g_release_posts);
-      fake_now = started + 20000000; run_button();
-      printf("cr5 lengthen10->20 at +5s: PUT=%d deadline=+%lldms on at +20s=%d releases=%d\n",
-             code, (long long)((deadline - started) / 1000), model_on, g_release_posts);
-      CHECK(code == 200 && deadline == started + 20000000 && !s_held && model_on == 0 && g_release_posts == 1); }
-    { int64_t started = cr_hold(120);
-      fake_now = started + 15000000; int code = put_body("{\"off_after_s\":10}"); run_button();
-      printf("cr5 shorten to an elapsed deadline: PUT=%d on=%d releases=%d\n", code, model_on, g_release_posts);
-      CHECK(code == 200 && !s_held && model_on == 0 && g_release_posts == 1); }
-    for (int extend = 0; extend < 2; extend++) {
-        int64_t started = cr_hold(10); fake_now = started + 10000000;
-        cr_timeout_setting = extend ? 20 : 0; g_acquire_hook = cr_timeout_change_at_lock; run_button();
-        printf("cr5 %s after timeout decision, while lock blocked: on=%d held=%d releases=%d\n",
-               extend ? "extend" : "disable", model_on, s_held, g_release_posts);
-        CHECK(s_held && model_on == 1 && !g_release_posts && !g_off_sets);
-    }
-    verdict("cr5", "held timeout changes disable, enable, shorten and lengthen using elapsed held time, including blocked Off");
-
     /* cr6. Parse the complete received body; the C-string prefix alone is not a request. */
-    { const char *bad[] = {"{\"settle_ms\":500}junk", "{\"settle_ms\":500}{\"role\":\"bad\"}"};
+    { const char *bad[] = {"{\"rx_wd_s\":500}junk", "{\"rx_wd_s\":500}{\"role\":\"bad\"}"};
       for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
           reset_case(); light_state(0); int code = put_body(bad[i]);
           printf("cr6 invalid suffix %zu: PUT=%d writes=%d\n", i, code, g_cfg_sets);
-          CHECK(code == 400 && nothing_written() && cfg_live.settle_ms == 2000);
+          CHECK(code == 400 && nothing_written() && cfg_live.rx_wd_s == 0);
       }
-      static const char raw_nul[] = "{\"settle_ms\":500}\0junk";
+      static const char raw_nul[] = "{\"rx_wd_s\":500}\0junk";
       reset_case(); light_state(0); int code = put_bytes(raw_nul, sizeof raw_nul - 1);
       printf("cr6 raw NUL in %zu received bytes: PUT=%d writes=%d\n", sizeof raw_nul - 1, code, g_cfg_sets);
-      CHECK(code == 400 && nothing_written() && cfg_live.settle_ms == 2000);
-      reset_case(); light_state(0); code = put_body(" \t\r\n{\"settle_ms\":500}\t\r\n ");
+      CHECK(code == 400 && nothing_written() && cfg_live.rx_wd_s == 0);
+      reset_case(); light_state(0); code = put_body(" \t\r\n{\"rx_wd_s\":500}\t\r\n ");
       printf("cr6 valid object with surrounding whitespace: PUT=%d writes=%d\n", code, g_cfg_sets);
-      CHECK(code == 200 && cfg_live.settle_ms == 500 && g_cfg_sets == 1); }
+      CHECK(code == 200 && cfg_live.rx_wd_s == 500 && g_cfg_sets == 1); }
     verdict("cr6", "junk, adjacent objects and raw NUL are rejected before writes; surrounding whitespace is valid");
 
     /* cr7. Decoded NULs cannot hide a suffix of a role, setting key, URL or clear sentinel. */
     { const char *bad[] = {"{\"role\":\"mirror\\u0000bad\"}",
-                          "{\"settle_ms\\u0000garbage\":500}",
+                          "{\"rx_wd_s\\u0000garbage\":500}",
                           "{\"webhook\":\"http://h/abcd\\u0000 secret\"}",
                           "{\"webhook\":\"-\\u0000bad\"}"};
       for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
           reset_case(); light_state(0); int code = put_body(bad[i]);
           printf("cr7 decoded-NUL variant %zu: PUT=%d writes=%d\n", i, code, g_cfg_sets);
-          CHECK(code == 400 && nothing_written() && cfg_live.role == CFG_ROLE_NONE && cfg_live.settle_ms == 2000);
+          CHECK(code == 400 && nothing_written() && cfg_live.role == CFG_ROLE_NONE && cfg_live.rx_wd_s == 0);
           CHECK(!strcmp(cfg_live.webhook, WH_TEST));
       }
       reset_case(); light_state(0); int code = put_body("{\"webhook\":\"http://h/abcd\\\\u0000literal\"}");
@@ -1223,28 +1053,26 @@ static void run_new(void) {
     /* c1. cfg_load with every NVS read failing */
     reset_case(); junk_cfg(); cfg_load();
     int c1a = is_defaults(&cfg_live);
-    reset_case(); kv_put_u8("role", 2); kv_put_u32("settle_ms", 1500); kv_put_str("webhook", "http://h/x"); g_cfg_get_err = ESP_FAIL; junk_cfg(); cfg_load();
+    reset_case(); kv_put_u8("role", 2); kv_put_u32("rx_wd_s", 300); kv_put_str("webhook", "http://h/x"); g_cfg_get_err = ESP_FAIL; junk_cfg(); cfg_load();
     int c1b = is_defaults(&cfg_live);
     reset_case(); g_cfg_open_err = ESP_FAIL; junk_cfg(); cfg_load();
     int c1c = is_defaults(&cfg_live);
-    printf("c1 no namespace: defaults=%d; namespace there, every read fails: defaults=%d; open fails: defaults=%d; role=%d settle=%u rearm=%u off=%u rx=%u stored=0x%x\n",
-           c1a, c1b, c1c, cfg_live.role, cfg_live.settle_ms, cfg_live.rearm_ms, cfg_live.off_after_s, cfg_live.rx_wd_s, cfg_live.stored);
+    printf("c1 no namespace: defaults=%d; namespace there, every read fails: defaults=%d; open fails: defaults=%d; role=%d rx=%u stored=0x%x\n",
+           c1a, c1b, c1c, cfg_live.role, cfg_live.rx_wd_s, cfg_live.stored);
     CHECK(c1a && c1b && c1c && g_cfg_sets == 0);
-    verdict("c1", "cfg_load, no namespace / every read failing: role none, no webhook, 2000/3000/the off_after_s default/0, nothing stored, nothing written");
+    verdict("c1", "cfg_load, no namespace / every read failing: role none, no webhook, rx_wd_s 0, nothing stored, nothing written");
 
-    /* c2. role=2 and settle_ms=1500 stored */
-    reset_case(); kv_put_u8("role", 2); kv_put_u32("settle_ms", 1500); junk_cfg(); cfg_load();
-    printf("c2 role=%d settle=%u rearm=%u off=%u rx=%u webhook='%s' stored=0x%x\n", cfg_live.role, cfg_live.settle_ms, cfg_live.rearm_ms,
-           cfg_live.off_after_s, cfg_live.rx_wd_s, cfg_live.webhook, cfg_live.stored);
-    CHECK(cfg_live.role == CFG_ROLE_SHORTCUT && cfg_live.settle_ms == 1500 && cfg_live.rearm_ms == 3000 && cfg_live.off_after_s == CONFIG_C6_BUTTON_OFF_AFTER_S
-          && cfg_live.rx_wd_s == 0 && !cfg_live.webhook[0] && cfg_live.stored == (CFG_K_ROLE | CFG_K_SETTLE_MS) && g_cfg_sets == 0);
-    verdict("c2", "cfg_load with role=2, settle_ms=1500 stored: those from NVS, the rest defaults");
+    /* c2. role=2 and rx_wd_s=300 stored */
+    reset_case(); kv_put_u8("role", 2); kv_put_u32("rx_wd_s", 300); junk_cfg(); cfg_load();
+    printf("c2 role=%d rx=%u webhook='%s' stored=0x%x\n", cfg_live.role, cfg_live.rx_wd_s, cfg_live.webhook, cfg_live.stored);
+    CHECK(cfg_live.role == CFG_ROLE_SHORTCUT && cfg_live.rx_wd_s == 300 && !cfg_live.webhook[0]
+          && cfg_live.stored == (CFG_K_ROLE | CFG_K_RX_WD_S) && g_cfg_sets == 0);
+    verdict("c2", "cfg_load with role=2, rx_wd_s=300 stored: those from NVS, the rest defaults");
 
     /* c8. stored values that are not valid fall back to the default and do not count as stored */
-    reset_case(); kv_put_u8("role", 7); kv_put_u32("settle_ms", 100); kv_put_u32("rearm_ms", 40000); kv_put_str("webhook", "ftp://x");
-    kv_put_u32("off_after_s", 5); kv_put_u32("rx_wd_s", 10); junk_cfg(); cfg_load();
+    reset_case(); kv_put_u8("role", 7); kv_put_str("webhook", "ftp://x"); kv_put_u32("rx_wd_s", 10); junk_cfg(); cfg_load();
     int c8a = is_defaults(&cfg_live);
-    reset_case(); kv_put_u32("role", 2); kv_put_u8("settle_ms", 9); junk_cfg(); cfg_load();         /* wrong NVS type */
+    reset_case(); kv_put_u32("role", 2); kv_put_u8("rx_wd_s", 40); junk_cfg(); cfg_load();         /* wrong NVS type */
     int c8b = is_defaults(&cfg_live);
     printf("c8 invalid stored values -> defaults=%d; wrong NVS types -> defaults=%d\n", c8a, c8b);
     CHECK(c8a && c8b);
@@ -1273,32 +1101,30 @@ static void run_new(void) {
     verdict("c3", "role words: none/mirror/shortcut accepted and stored; Mirror, bulb and empty are 400 with nothing written");
 
     /* c4. ranges, all or nothing */
-    { static const char *bad[] = {"\"settle_ms\":100", "\"settle_ms\":199", "\"settle_ms\":10001", "\"rearm_ms\":30001", "\"off_after_s\":5", "\"off_after_s\":9",
-                                  "\"off_after_s\":3601", "\"rx_wd_s\":10", "\"rx_wd_s\":29", "\"rx_wd_s\":3601"};
+    { static const char *bad[] = {"\"rx_wd_s\":10", "\"rx_wd_s\":29", "\"rx_wd_s\":3601"};
       char body[200]; int all = 1;
       for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) for (int order = 0; order < 2; order++) {
           reset_case(); light_state(0); set_role(CFG_ROLE_MIRROR); cfg_live.webhook[0] = 0;
-          snprintf(body, sizeof body, order ? "{%s,\"rearm_ms\":5000,\"webhook\":\"http://h/ok\"}" : "{\"rearm_ms\":5000,\"webhook\":\"http://h/ok\",%s}", bad[i]);
+          snprintf(body, sizeof body, order ? "{%s,\"role\":\"shortcut\",\"webhook\":\"http://h/ok\"}" : "{\"role\":\"shortcut\",\"webhook\":\"http://h/ok\",%s}", bad[i]);
           int code = put_body(body);
-          int good = code == 400 && nothing_written() && cfg_live.rearm_ms == 3000 && !cfg_live.webhook[0] && cfg_live.role == CFG_ROLE_MIRROR;
-          if (!good) printf("c4 %s (order %d): http=%d written=%d rearm=%u webhook='%s'\n", bad[i], order, code, g_cfg_sets, cfg_live.rearm_ms, cfg_live.webhook);
+          int good = code == 400 && nothing_written() && !cfg_live.webhook[0] && cfg_live.role == CFG_ROLE_MIRROR;
+          if (!good) printf("c4 %s (order %d): http=%d written=%d role=%d webhook='%s'\n", bad[i], order, code, g_cfg_sets, cfg_live.role, cfg_live.webhook);
           all &= good;
       }
       printf("c4 %zu out-of-range values, each beside two valid keys, in both orders: every one 400 with nothing written=%d\n", sizeof bad / sizeof bad[0], all);
       CHECK(all);
-      static const struct {const char *k; uint32_t v;} edge[] = {{"settle_ms", 200}, {"settle_ms", 10000}, {"rearm_ms", 0}, {"rearm_ms", 30000}, {"off_after_s", 0},
-                                                                 {"off_after_s", 10}, {"off_after_s", 3600}, {"rx_wd_s", 0}, {"rx_wd_s", 30}, {"rx_wd_s", 3600}};
+      static const struct {const char *k; uint32_t v;} edge[] = {{"rx_wd_s", 0}, {"rx_wd_s", 30}, {"rx_wd_s", 3600}};
       int edges = 1;
       for (size_t i = 0; i < sizeof edge / sizeof edge[0]; i++) {
           reset_case(); light_state(0); snprintf(body, sizeof body, "{\"%s\":%u}", edge[i].k, edge[i].v);
           int code = put_body(body); uint32_t stored = 0xFFFFFFFFu; int kv = kv_u(edge[i].k, &stored);
-          int good = code == 200 && num_by_name(&cfg_live, edge[i].k) == edge[i].v && kv && stored == edge[i].v;
-          if (!good) printf("c4 edge %s=%u: http=%d live=%u nvs=%u\n", edge[i].k, edge[i].v, code, num_by_name(&cfg_live, edge[i].k), stored);
+          int good = code == 200 && cfg_live.rx_wd_s == edge[i].v && kv && stored == edge[i].v;
+          if (!good) printf("c4 edge %s=%u: http=%d live=%u nvs=%u\n", edge[i].k, edge[i].v, code, cfg_live.rx_wd_s, stored);
           edges &= good;
       }
-      printf("c4 in-range edges (200, 10000, 0, 30000, 0, 10, 3600, 0, 30, 3600) all written=%d\n", edges);
+      printf("c4 in-range edges (0, 30, 3600) all written=%d\n", edges);
       CHECK(edges); }
-    verdict("c4", "ranges: out-of-range 400 with no key of the request written; the edge values 200/10000/0/10/30/3600 written");
+    verdict("c4", "ranges: out-of-range 400 with no key of the request written; the rx_wd_s edge values 0/30/3600 written");
 
     /* c5. webhook values */
     { char body[400], url[300]; int all = 1;
@@ -1332,22 +1158,22 @@ static void run_new(void) {
     /* c7. body shapes */
     { char big[600]; int all = 1;
       struct {const char *name; const char *body; const char *must;} shape[] = {
-          {"not JSON", "settle_ms=2000", "body"}, {"JSON array", "[{\"settle_ms\":2000}]", "body"}, {"settle_ms as a string", "{\"settle_ms\":\"2000\"}", "settle_ms"},
-          {"settle_ms 2000.5", "{\"settle_ms\":2000.5}", "settle_ms"}, {"settle_ms -1", "{\"settle_ms\":-1}", "settle_ms"}, {"an unknown key", "{\"bogus_key\":1}", "bogus_key"},
-          {"an unknown key beside a valid one", "{\"settle_ms\":2500,\"bogus_key\":1}", "bogus_key"}, {"a repeated key", "{\"settle_ms\":2500,\"settle_ms\":2600}", "settle_ms"},
+          {"not JSON", "rx_wd_s=300", "body"}, {"JSON array", "[{\"rx_wd_s\":300}]", "body"}, {"rx_wd_s as a string", "{\"rx_wd_s\":\"300\"}", "rx_wd_s"},
+          {"rx_wd_s 300.5", "{\"rx_wd_s\":300.5}", "rx_wd_s"}, {"rx_wd_s -1", "{\"rx_wd_s\":-1}", "rx_wd_s"}, {"an unknown key", "{\"bogus_key\":1}", "bogus_key"},
+          {"an unknown key beside a valid one", "{\"rx_wd_s\":300,\"bogus_key\":1}", "bogus_key"}, {"a repeated key", "{\"rx_wd_s\":300,\"rx_wd_s\":400}", "rx_wd_s"},
           {"an empty object is fine", "{}", NULL},
       };
       for (size_t i = 0; i < sizeof shape / sizeof shape[0]; i++) {
           reset_case(); light_state(0); int code = put_body(shape[i].body);
-          int good = shape[i].must ? code == 400 && nothing_written() && cfg_live.settle_ms == 2000 && resp_has(shape[i].must) && resp_has("\"error\":\"bad_request\"")
+          int good = shape[i].must ? code == 400 && nothing_written() && cfg_live.rx_wd_s == 0 && resp_has(shape[i].must) && resp_has("\"error\":\"bad_request\"")
                                    : code == 200 && nothing_written();
           printf("c7 %s: http=%d written=%d %s\n", shape[i].name, code, g_cfg_sets, g_req.response);
           all &= good;
       }
-      memset(big, ' ', sizeof big); memcpy(big, "{\"settle_ms\":2500}", 18); big[513] = 0;                    /* 513 bytes */
-      reset_case(); light_state(0); { int code = put_body(big); int good = code == 400 && nothing_written() && cfg_live.settle_ms == 2000; printf("c7 513-byte body: http=%d refused=%d\n", code, good); all &= good; }
+      memset(big, ' ', sizeof big); memcpy(big, "{\"rx_wd_s\":300}", 15); big[513] = 0;                    /* 513 bytes */
+      reset_case(); light_state(0); { int code = put_body(big); int good = code == 400 && nothing_written() && cfg_live.rx_wd_s == 0; printf("c7 513-byte body: http=%d refused=%d\n", code, good); all &= good; }
       big[512] = 0;                                                                                          /* 512 bytes: the limit itself */
-      reset_case(); light_state(0); { int code = put_body(big); int good = code == 200 && cfg_live.settle_ms == 2500; printf("c7 512-byte body: http=%d accepted=%d\n", code, good); all &= good; }
+      reset_case(); light_state(0); { int code = put_body(big); int good = code == 200 && cfg_live.rx_wd_s == 300; printf("c7 512-byte body: http=%d accepted=%d\n", code, good); all &= good; }
       reset_case(); light_state(0); { g_req = (httpd_req_t){0}; g_req.body = ""; settings_put(&g_req); int good = g_req.code == 400 && nothing_written(); printf("c7 empty body: http=%d refused=%d\n", g_req.code, good); all &= good; }
       CHECK(all); }
     verdict("c7", "body shapes: not JSON, an array, a string/fraction/negative number, an unknown or repeated key, 513 bytes and an empty body are 400 with nothing written");
@@ -1408,8 +1234,8 @@ static void run_new(void) {
         printf("c9 refused values (1, 0, \"on\", \"true\", null, 2.5): every one 400 'hue: true or false', nothing written, cfg_live unchanged=%d\n", refused);
         CHECK(refused);
         reset_case(); junk_cfg(); cfg_load(); light_state(0);
-        int mixed = put_body("{\"rearm_ms\":5000,\"hue\":1}");
-        CHECK(mixed == 400 && nothing_written() && cfg_live.rearm_ms == 3000);                  /* all or nothing, as every key */
+        int mixed = put_body("{\"rx_wd_s\":300,\"hue\":1}");
+        CHECK(mixed == 400 && nothing_written() && cfg_live.rx_wd_s == 0);                  /* all or nothing, as every key */
         /* pending with ext_pan and hue */
         reset_case(); junk_cfg(); cfg_load(); light_state(0);
         int pb = put_body("{\"ext_pan\":\"0123456789ABCDEF\",\"hue\":false}");
@@ -1431,21 +1257,20 @@ static void run_new(void) {
     verdict("c9", "hue: default true (live and in GET, not in stored); stored 0/1 are false/true and in stored; stored 7 is true with the 'not usable (out of range)' line and not in stored; PUT false/true is 200, written as u8 0/1, in stored, the answer's pending lists hue exactly while it differs from the boot value (and ext_pan beside it, in that order); 1, 0, \"on\", null and other non-booleans are 400 'hue: true or false' with nothing written; the boot value is the one cfg_load read");
 
     /* g1. the GET document */
-    reset_case(); kv_put_u8("role", 2); kv_put_u32("settle_ms", 1500); cfg_load(); get_settings();
+    reset_case(); kv_put_u8("role", 2); kv_put_u32("rx_wd_s", 300); cfg_load(); get_settings();
     printf("g1 %s\n", g_req.response);
-    CHECK(resp_has("\"role\":\"shortcut\"") && resp_has("\"settle_ms\":1500") && resp_has("\"rearm_ms\":3000") && resp_has("\"off_after_s\":" HX_XSTR(CONFIG_C6_BUTTON_OFF_AFTER_S))
-          && resp_has("\"rx_wd_s\":0") && resp_has("\"stored\":[\"role\",\"settle_ms\"]"));
+    CHECK(resp_has("\"role\":\"shortcut\"") && resp_has("\"rx_wd_s\":300") && resp_has("\"stored\":[\"role\",\"rx_wd_s\"]"));
     reset_case(); cfg_load(); get_settings();
     CHECK(resp_has("\"role\":\"none\"") && resp_has("\"webhook\":\"\"") && resp_has("\"stored\":[]"));
-    verdict("g1", "GET document: role word, webhook, the four numbers and the list of stored keys (empty when everything is a default)");
+    verdict("g1", "GET document: role word, webhook, rx_wd_s and the list of stored keys (empty when everything is a default)");
 
     /* s1. a PUT survives a reload */
     reset_case(); light_state(0); set_role(CFG_ROLE_NONE);
-    { int code = put_body("{\"role\":\"mirror\",\"webhook\":\"http://h/persist\",\"settle_ms\":1234,\"rearm_ms\":4321,\"off_after_s\":77,\"rx_wd_s\":99}");
+    { int code = put_body("{\"role\":\"mirror\",\"webhook\":\"http://h/persist\",\"rx_wd_s\":99}");
       cfg_t saved; cfg_get(&saved); junk_cfg(); cfg_load();
-      printf("s1 http=%d, after cfg_load: role=%d settle=%u rearm=%u off=%u rx=%u stored=0x%x\n", code, cfg_live.role, cfg_live.settle_ms, cfg_live.rearm_ms, cfg_live.off_after_s, cfg_live.rx_wd_s, cfg_live.stored);
-      CHECK(code == 200 && saved.stored == 0x3f && same_cfg(&saved, &cfg_live) && cfg_live.role == CFG_ROLE_MIRROR && !strcmp(cfg_live.webhook, "http://h/persist")); }
-    verdict("s1", "all six keys written by one PUT are what cfg_load reads back (same keys, same types)");
+      printf("s1 http=%d, after cfg_load: role=%d rx=%u stored=0x%x\n", code, cfg_live.role, cfg_live.rx_wd_s, cfg_live.stored);
+      CHECK(code == 200 && saved.stored == (CFG_K_ROLE | CFG_K_WEBHOOK | CFG_K_RX_WD_S) && same_cfg(&saved, &cfg_live) && cfg_live.role == CFG_ROLE_MIRROR && !strcmp(cfg_live.webhook, "http://h/persist")); }
+    verdict("s1", "the keys written by one PUT (role, webhook, rx_wd_s) are what cfg_load reads back (same keys, same types)");
 
     /* t1. the token */
     reset_case(); s_claimed = false; g_auto_bearer = 0; light_state(0);                       /* 0.5.0: c6_auth_ok, the real one */
@@ -1470,7 +1295,7 @@ static void run_new(void) {
     verdict("r1", "mirror, light on -> shortcut: Off first (under the old role), then button state cleared and the role stored; no press pushed");
 
     /* r2. shortcut with a press held -> mirror */
-    reset_case(); set_role(CFG_ROLE_SHORTCUT); s_held = true; s_off_at_us = fake_now + 100000000; s_release_by = "zigbee";
+    reset_case(); set_role(CFG_ROLE_SHORTCUT); s_held = true; s_press_pending = true; s_release_by = "zigbee";
     { int code = put_body("{\"role\":\"mirror\"}"); uint32_t stored = 99; int kv = kv_u("role", &stored);
       run_button(); run_push(); fake_now += 130000000; run_button();
       printf("r2 http=%d: Off sets=%d, model_on=%d, held=%d, release_by=%s, role live=%d stored=%u, posts=%d (release posts %d) after the button task ran\n",
@@ -1488,9 +1313,9 @@ static void run_new(void) {
 
     /* r4. the Zigbee lock is busy */
     reset_case(); set_role(CFG_ROLE_MIRROR); dirty_button_state(); lock_ok = false;
-    { int code = put_body("{\"role\":\"shortcut\",\"settle_ms\":4000}");
-      printf("r4 http=%d %s: role live=%d, written=%d, model_on=%d, settle=%u\n", code, g_req.response, cfg_live.role, g_cfg_sets, model_on, cfg_live.settle_ms);
-      CHECK(code == 503 && resp_has("\"error\":\"zigbee_busy\"") && cfg_live.role == CFG_ROLE_MIRROR && nothing_written() && cfg_live.settle_ms == 2000);
+    { int code = put_body("{\"role\":\"shortcut\",\"rx_wd_s\":300}");
+      printf("r4 http=%d %s: role live=%d, written=%d, model_on=%d, rx_wd_s=%u\n", code, g_req.response, cfg_live.role, g_cfg_sets, model_on, cfg_live.rx_wd_s);
+      CHECK(code == 503 && resp_has("\"error\":\"zigbee_busy\"") && cfg_live.role == CFG_ROLE_MIRROR && nothing_written() && cfg_live.rx_wd_s == 0);
       CHECK(model_on == 1 && s_light.val[L_ON] == 1 && button_state_untouched()); }
     verdict("r4", "lock busy: 503 zigbee_busy, role not stored (nor any other key of the request), state untouched");
 
@@ -1505,8 +1330,8 @@ static void run_new(void) {
     /* r6. none -> mirror, then a Zigbee controller On */
     reset_case(); set_role(CFG_ROLE_NONE); light_state(0);
     { int code = put_body("{\"role\":\"mirror\"}"); ctl(6, HUB_ON, sizeof HUB_ON);
-      printf("r6 http=%d: role=%d, push_due=%s, press_due=%lld, held=%d\n", code, cfg_live.role, s_push_due_us ? "set" : "0", (long long)s_press_at_us, s_held);
-      CHECK(code == 200 && cfg_live.role == CFG_ROLE_MIRROR && s_push_due_us != 0 && !s_press_at_us && !s_held && !s_off_at_us); }
+      printf("r6 http=%d: role=%d, push_due=%s, pending=%d, held=%d\n", code, cfg_live.role, s_push_due_us ? "set" : "0", s_press_pending, s_held);
+      CHECK(code == 200 && cfg_live.role == CFG_ROLE_MIRROR && s_push_due_us != 0 && !s_press_pending && !s_held); }
     verdict("r6", "none -> mirror: the next Zigbee controller On arms the push path and leaves the button state alone");
 
     puts("==== The Zigbee controller tap and the two tasks, by role ====");
@@ -1516,9 +1341,9 @@ static void run_new(void) {
     ctl(6, HUB_ON, sizeof HUB_ON);
     { int notified_push = g_notify_push, notified_button = g_notify_button;
       run_push(); run_button(); fake_now += 130000000; run_button();
-      printf("h1 role none, Zigbee controller On: hub_on=%u push_due=%lld press_due=%lld held=%d, notifies push=%d button=%d, posts after both tasks ran=%d, sets=%d\n",
-             s_hub.val[L_ON], (long long)s_push_due_us, (long long)s_press_at_us, s_held, notified_push, notified_button, g_nposts, g_set_calls);
-      CHECK(s_hub.val[L_ON] == 1 && s_hub_cmd_us != 0 && !s_push_due_us && !s_press_at_us && !s_held && !s_off_at_us);
+      printf("h1 role none, Zigbee controller On: hub_on=%u push_due=%lld pending=%d held=%d, notifies push=%d button=%d, posts after both tasks ran=%d, sets=%d\n",
+             s_hub.val[L_ON], (long long)s_push_due_us, s_press_pending, s_held, notified_push, notified_button, g_nposts, g_set_calls);
+      CHECK(s_hub.val[L_ON] == 1 && s_hub_cmd_us != 0 && !s_push_due_us && !s_press_pending && !s_held);
       CHECK(notified_push == 1 && notified_button == 1);
       CHECK(g_nposts == 0 && g_set_calls == 0 && g_http_inits == 0); }
     verdict("h1", "role none, Zigbee controller On: both tasks woken, nothing armed, nothing pushed");
@@ -1528,30 +1353,31 @@ static void run_new(void) {
     ctl(6, HUB_ON, sizeof HUB_ON);
     { int notified_push = g_notify_push, notified_button = g_notify_button; int64_t due = s_push_due_us;
       run_button(); fake_now += 130000000; run_button(); int posts_button = g_nposts; run_push();
-      printf("h2 role mirror, Zigbee controller On: push_due=%s press_due=%lld, notifies push=%d button=%d, posts from the button task=%d, from the push task=%d [%s]\n",
-             due ? "set" : "0", (long long)s_press_at_us, notified_push, notified_button, posts_button, g_nposts, g_nposts ? g_posts[0] : "-");
-      CHECK(due != 0 && !s_press_at_us && !s_held && notified_push == 1 && notified_button == 1);
+      printf("h2 role mirror, Zigbee controller On: push_due=%s pending=%d, notifies push=%d button=%d, posts from the button task=%d, from the push task=%d [%s]\n",
+             due ? "set" : "0", s_press_pending, notified_push, notified_button, posts_button, g_nposts, g_nposts ? g_posts[0] : "-");
+      CHECK(due != 0 && !s_press_pending && !s_held && notified_push == 1 && notified_button == 1);
       CHECK(posts_button == 0 && g_nposts == 1 && post_has(0, "\"on\":1") && !post_has(0, "press") && s_push_due_us == 0 && !strcmp(g_last_url, WH_TEST)); }
     verdict("h2", "role mirror, Zigbee controller On: push armed, no press; only the push task posts, to the webhook setting");
 
-    /* h3. shortcut */
+    /* h3. shortcut: pushed at once, no quiet time */
     reset_case(); set_role(CFG_ROLE_SHORTCUT); light_state(0);
     ctl(6, HUB_ON, sizeof HUB_ON);
     { int notified_push = g_notify_push, notified_button = g_notify_button;
-      run_push(); run_button(); int before = g_nposts; fake_now += 2100000; run_button();
-      printf("h3 role shortcut, Zigbee controller On, quiet 2.1 s: notifies push=%d button=%d, posts before settle=%d, after=%d [%s], held=%d, push_due=%lld\n",
-             notified_push, notified_button, before, g_nposts, g_nposts ? g_posts[0] : "-", s_held, (long long)s_push_due_us);
-      CHECK(notified_push == 1 && notified_button == 1 && !s_push_due_us && before == 0);
-      CHECK(g_nposts == 1 && g_press_posts == 1 && post_has(0, "\"press\":1") && s_held); }
-    verdict("h3", "role shortcut, Zigbee controller On then quiet >= settle: one press pushed; the push task does nothing");
+      run_push(); run_button();
+      printf("h3 role shortcut, Zigbee controller On, no quiet time: notifies push=%d button=%d, posts=%d [%s], held=%d, pending=%d, push_due=%lld\n",
+             notified_push, notified_button, g_nposts, g_nposts ? g_posts[0] : "-", s_held, s_press_pending, (long long)s_push_due_us);
+      CHECK(notified_push == 1 && notified_button == 1 && !s_push_due_us);
+      CHECK(g_nposts == 1 && g_press_posts == 1 && post_has(0, "\"press\":1") && s_held && !s_press_pending); }
+    verdict("h3", "role shortcut, Zigbee controller On: one press pushed at once, with no quiet time; the push task does nothing");
 
-    /* h4. settle_ms changed live */
+    /* h3b. shortcut: On, then Off before the task ran */
     reset_case(); set_role(CFG_ROLE_SHORTCUT); light_state(0);
-    { int code = put_body("{\"settle_ms\":500}"); ctl(6, HUB_ON, sizeof HUB_ON);
-      run_button(); fake_now += 400000; run_button(); int at400 = g_press_posts; fake_now += 200000; run_button();
-      printf("h4 settle_ms 500 set live (http=%d): presses at +400 ms=%d, at +600 ms=%d\n", code, at400, g_press_posts);
-      CHECK(code == 200 && at400 == 0 && g_press_posts == 1 && s_held); }
-    verdict("h4", "settle_ms changed to 500 live: the press is pushed at the new quiet time, not the old one");
+    { static const uint8_t off[] = {1, 1, 0};
+      ctl(6, HUB_ON, sizeof HUB_ON); int pending_after_on = s_press_pending;
+      ctl(6, off, sizeof off); run_button();
+      printf("h3b role shortcut, Zigbee controller On then Off before the task ran: pending after On=%d, after Off=%d, posts=%d, held=%d\n", pending_after_on, s_press_pending, g_nposts, s_held);
+      CHECK(pending_after_on && !s_press_pending && g_nposts == 0 && g_press_posts == 0 && !s_held); }
+    verdict("h3b", "role shortcut, Zigbee controller On then Off before the task ran: nothing is pushed and nothing stays pending");
 
     /* gd. 0.3.27's group-Off drop is unchanged by the role */
     for (int role = CFG_ROLE_NONE; role <= CFG_ROLE_SHORTCUT; role++) {
@@ -1683,20 +1509,19 @@ static void run_new(void) {
              code, cfg_role_name(live), stored_role, kv_s("webhook") ? "stored" : "none", cfg_role_name(cfg_live.role), g_req.response);
       CHECK(code == 500 && live == CFG_ROLE_NONE && resp_has("\"storage\""));
       CHECK(stored_role == CFG_ROLE_NONE && cfg_live.role == CFG_ROLE_NONE && !kv_s("webhook")); }
-    reset_case(); kv_put_u32("settle_ms", 1500); kv_put_u32("rearm_ms", 700); cfg_load(); g_fail_set_at = 2;
-    { int code = put_body("{\"settle_ms\":900,\"rearm_ms\":500}");
-      uint32_t a = 0, b = 0; kv_u("settle_ms", &a); kv_u("rearm_ms", &b);
-      uint32_t live_s = cfg_live.settle_ms, live_r = cfg_live.rearm_ms;
+    reset_case(); kv_put_u32("rx_wd_s", 300); cfg_load(); g_fail_set_at = 2;
+    { int code = put_body("{\"rx_wd_s\":900,\"ext_pan\":\"0123456789ABCDEF\"}");
+      uint32_t a = 0; kv_u("rx_wd_s", &a);
+      uint32_t live_r = cfg_live.rx_wd_s; int pan = kv_s("ext_pan") != NULL;
       cfg_load();
-      printf("x3b stored settle 1500 / rearm 700, second set fails: http=%d NVS %u/%u live %u/%u after cfg_load %u/%u\n",
-             code, a, b, live_s, live_r, cfg_live.settle_ms, cfg_live.rearm_ms);
-      CHECK(code == 500 && a == 1500 && b == 700 && live_s == 1500 && live_r == 700);
-      CHECK(cfg_live.settle_ms == 1500 && cfg_live.rearm_ms == 700); }
-    reset_case(); kv_put_u32("settle_ms", 1500); cfg_load(); g_cfg_commit_err = ESP_FAIL;
-    { int code = put_body("{\"settle_ms\":900}");
-      uint32_t a = 0; kv_u("settle_ms", &a);
-      printf("x3c commit fails: http=%d NVS settle_ms=%u live=%u\n", code, a, cfg_live.settle_ms);
-      CHECK(code == 500 && a == 1500 && cfg_live.settle_ms == 1500); }
+      printf("x3b stored rx_wd_s 300, second set (ext_pan) fails: http=%d NVS %u live %u ext_pan stored=%d after cfg_load %u\n", code, a, live_r, pan, cfg_live.rx_wd_s);
+      CHECK(code == 500 && a == 300 && live_r == 300 && !pan);
+      CHECK(cfg_live.rx_wd_s == 300); }
+    reset_case(); kv_put_u32("rx_wd_s", 300); cfg_load(); g_cfg_commit_err = ESP_FAIL;
+    { int code = put_body("{\"rx_wd_s\":900}");
+      uint32_t a = 0; kv_u("rx_wd_s", &a);
+      printf("x3c commit fails: http=%d NVS rx_wd_s=%u live=%u\n", code, a, cfg_live.rx_wd_s);
+      CHECK(code == 500 && a == 300 && cfg_live.rx_wd_s == 300); }
     verdict("x3", "a PUT answered 500 storage leaves no key changed in NVS or live (second set fails, or the commit fails)");
 
     /* x4. a body nested more than one level is refused before cJSON recurses; strings and escapes do not count */
@@ -1738,7 +1563,7 @@ int main(int argc, char **argv) {
     g_verbose = getenv("HARNESS_VERBOSE") != NULL;
     const char *mode = argc > 1 ? argv[1] : "new";
     if (!strcmp(mode, "old")) {
-        g_mode_role = CFG_ROLE_SHORTCUT; puts("mode: old (the 21 probes of 0.3.24, role shortcut)"); run_old();
+        g_mode_role = CFG_ROLE_SHORTCUT; puts("mode: old (the 16 probes of 0.3.24 that 0.8.0 keeps, role shortcut)"); run_old();
     } else if (!strcmp(mode, "old-normal")) {
         g_mode_role = CFG_ROLE_MIRROR; puts("mode: old-normal (the normal-mode probe, role mirror)"); run_old_normal();
     } else if (!strcmp(mode, "new")) {
@@ -1754,8 +1579,7 @@ int main(int argc, char **argv) {
 }
 '''
 
-code = (pre.replace('@@OFF_AFTER_S@@', kdefault(KC_BULB, 'C6_BUTTON_OFF_AFTER_S'))
-        .replace('@@VERIFY_TIMEOUT_S@@', kdefault(KC_BASE, 'C6_VERIFY_TIMEOUT_S')).replace('@@VERIFY_STABLE_S@@', kdefault(KC_BASE, 'C6_VERIFY_STABLE_S'))
+code = (pre.replace('@@VERIFY_TIMEOUT_S@@', kdefault(KC_BASE, 'C6_VERIFY_TIMEOUT_S')).replace('@@VERIFY_STABLE_S@@', kdefault(KC_BASE, 'C6_VERIFY_STABLE_S'))
         .replace('@@VERIFY_ZIGBEE_S@@', kdefault(KC_BASE, 'C6_VERIFY_ZIGBEE_S'))
         .replace('@@CFG_TYPES@@', cat(types)).replace('@@HEADERS@@', headers).replace('@@BOARD_STUBS@@', board_stubs)
         + extracted + '\n' + board_after + '\n' + main.replace('@@BOARD_PROBES@@', board_probes))

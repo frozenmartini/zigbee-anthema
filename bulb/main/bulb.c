@@ -31,7 +31,7 @@
  *   POST /zb/light?on=&level=&ct=   the client sets the light's state; On/Off reaches the Zigbee controller
  *                     as a report (ignored for 3 s after a Zigbee controller command). Since 0.5.0 it takes the
  *                     developer credential (c6_base_token_ok); it had no check before
- *   GET|PUT /api/v1/settings   the role, webhook, button timings and RX watchdog (token; 0.4.0,
+ *   GET|PUT /api/v1/settings   the role, webhook and RX watchdog (token; 0.4.0,
  *                     api/v1/settings.c); ext_pan and name since 0.5.0
  *   POST /api/v1/zigbee/pair    start the fast join phase and steer now; 409 when already joined
  *   POST /api/v1/zigbee/leave   leave and forget the network, group cleared
@@ -48,23 +48,17 @@
  * the webhook (WEBHOOK in the log) with everything the Zigbee controller has asked for so far; the mirror role.
  *
  * Shortcut button (0.3.21; the shortcut role since 0.4.0): the touchscreen's light page
- * stays up for as long as the group is on, so the bulb does not stay on. A Zigbee controller command that leaves it on is a
- * press (BUTTON-PRESS), pushed once when the Zigbee controller has gone quiet, as {"press":N,...} with the level
- * and colour asked for. The client runs the shortcut and answers POST /zb/light?on=0, whose Off
- * report clears the touchscreen; failing that the bulb reports Off by itself after
- * off_after_s (BUTTON-TIMEOUT). Zigbee controller Offs are not pushed. Power-up is always Off.
- * 0.3.22: a pushed press is held until released, so Zigbee controller changes meanwhile are not new presses; an On
- * within rearm_ms of a release is released at once (BUTTON-LATE); settle 2 s.
- * 0.3.23: the client holds a switch on for the press and turns it off as its shortcut's last step; that Off is
- * the "done". A release the client did not make is pushed (BUTTON-RELEASE). Self-Off after 120 s.
- * 0.3.24: state is recorded
- * before the Zigbee lock is released; a self-release that fails is retried; a release before the press
+ * stays up for as long as the group is on, so the bulb does not stay on. The first Zigbee controller command
+ * that turns the group on is a press (BUTTON-PRESS), pushed at once as {"press":N,...} with the level and
+ * colour asked for. A pushed press is held until it is released, so Zigbee controller changes meanwhile are
+ * part of it, not new presses. The client runs the shortcut and calls POST /api/v1/button/release, whose Off
+ * report clears the touchscreen; or the touchscreen turns the group off. Zigbee controller Offs are not
+ * presses; a release the client did not make is pushed (BUTTON-RELEASE). Power-up is always Off.
+ * 0.3.24: state is recorded before the Zigbee lock is released; a release before the press
  * reached the client is pushed after it; release pushes are retried, presses never; saves are tracked by
  * generation and retried on failure; the restore guard survives only crashes; POST /zb/light takes only
  * on=0 in button mode; /zb/report's remove= is withdrawn; the decoder takes only standard, complete
  * commands from the coordinator with APS success.
- * off_after_s defaults to 0 since 0.6.0: a press is held until the client releases it (mode 1) or the touchscreen
- * turns it off (mode 2).
  *
  * Watchdog: on the tested Zigbee controller the clone once stopped receiving at all (after a
  * run of colour commands) while Wi-Fi, the radio and the stack loop stayed up; a reboot fixed it.
@@ -86,8 +80,8 @@
  * 0.3.27: a group Off while already off is consumed before the stack sees it (ZB-DROP); the stack
  * answered one by reporting On for a second. See hub_tap.
  *
- * 0.4.0: one binary for every board. The role (none, mirror, shortcut), the webhook, the
- * button's timings and the RX watchdog are settings in NVS, changed live by PUT /api/v1/settings; an
+ * 0.4.0: one binary for every board. The role (none, mirror, shortcut), the webhook and the
+ * RX watchdog are settings in NVS, changed live by PUT /api/v1/settings; an
  * empty store is role none: no pushes, no button. A role change while the light is on reports Off
  * first (ROLE-OFF), so the Zigbee controller starts clean.
  *
@@ -174,13 +168,9 @@ static int64_t s_hub_cmd_us;                       /* last Zigbee controller com
 static TaskHandle_t s_push_task, s_button_task;    /* both exist from boot; hub_tap wakes both (0.4.0) */
 static light_state_t s_hub;                        /* what the Zigbee controller's commands asked for (s_light_mux) */
 #define ECHO_WINDOW_US (3 * 1000000LL)             /* POST /zb/light is ignored this long after a Zigbee controller command */
-static int64_t s_press_at_us;                      /* button: last Zigbee controller command of a press not yet pushed; 0: none (s_light_mux) */
-static int64_t s_off_at_us;                        /* button: report Off by itself at this time; 0: never (s_light_mux) */
-static int64_t s_press_first_us;                   /* button: first Zigbee controller command of the press not yet pushed (s_light_mux) */
+static bool s_press_pending;                       /* button: a press the task has not pushed yet (s_light_mux) */
 static bool s_held;                                /* button: a press was pushed and is not released yet (s_light_mux) */
-static int64_t s_held_at_us;                       /* button: when this held press started; keeps a live timeout's elapsed time (s_light_mux) */
 static uint32_t s_button_generation;              /* button: changes at each published role switch; cancels old work across waits (s_light_mux) */
-static int64_t s_released_at_us;                   /* button: when the last pushed press was released; 0: never (s_light_mux) */
 static const char *s_release_by;                   /* button: a release the client has not been told of; NULL: none (s_light_mux) */
 static bool s_delivering;                          /* button: a press is decided and not yet posted to the webhook (s_light_mux) */
 /* Joining (0.5.0): from factory new until joined, a steer at boot and then one after each
@@ -213,13 +203,12 @@ static const char *s_light_by;                     /* who last changed s_light: 
 static int64_t s_light_at_us;                      /* when; 0: never */
 static uint32_t s_hub_seq;                         /* Zigbee controller commands decoded since boot (hub_tap's `any`) */
 static uint32_t s_presses;                         /* button: presses since boot (button_task's local until 0.4.0) */
-static const char *s_release_last;                 /* button: the last release, "api", "zigbee" or "timeout"; NULL: none */
+static const char *s_release_last;                 /* button: the last release, "api" or "zigbee"; NULL: none */
 static int64_t s_button_at_us;                     /* button: the last change of s_held or s_presses; 0: never */
 _Static_assert((int)SNAP_COUNT == (int)L_COUNT && (int)SNAP_ON == (int)L_ON && (int)SNAP_LEVEL == (int)L_LEVEL
                && (int)SNAP_MODE == (int)L_MODE && (int)SNAP_X == (int)L_X && (int)SNAP_Y == (int)L_Y
                && (int)SNAP_CT == (int)L_CT && (int)SNAP_HUE == (int)L_HUE && (int)SNAP_SAT == (int)L_SAT,
                "state.h's SNAP_* follow L_*");     /* (int): two anonymous enums (-Werror=enum-compare) */
-#define BUTTON_RETRY_US (5 * 1000000LL)            /* button: a self-release that could not be applied is retried */
 
 /* ---------------------------------------------------------------- ZCL */
 
@@ -234,20 +223,17 @@ static inline void light_mark_changed_locked(int64_t now, const char *by)
 }
 
 /* The light.by of a light_apply caller, from its log name: API-SET and API-RELEASE are the
- * client's; ROLE-OFF, BUTTON-TIMEOUT and BUTTON-LATE the board's own. */
+ * client's; ROLE-OFF the board's own. */
 static const char *light_by_of(const char *who)
 {
     return strncmp(who, "API-", 4) == 0 ? "api" : "self";
 }
 
-/* The button.release_by of a release made by a light_apply caller: the client's, or the button's own
- * timeout (BUTTON-*); NULL for one that is neither (ROLE-OFF clears the button anyway). */
+/* The button.release_by of a release made by a light_apply caller: the client's (API-*); NULL for any
+ * other (ROLE-OFF clears the button anyway). */
 static const char *light_release_by_of(const char *who)
 {
-    if (strncmp(who, "API-", 4) == 0) {
-        return "api";
-    }
-    return strncmp(who, "BUTTON-", 7) == 0 ? "timeout" : NULL;
+    return strncmp(who, "API-", 4) == 0 ? "api" : NULL;
 }
 
 static void log_light(const char *what, const light_state_t *l)
@@ -438,22 +424,17 @@ static bool hub_tap(const ezb_apsde_data_ind_t *ind)
     }
     if (any && role == CFG_ROLE_SHORTCUT) {
         if ((s_hub.seen & (1u << L_ON)) && s_hub.val[L_ON]) {
-            if (!s_held) {                        /* while held, a change is part of the press already pushed */
-                if (!s_press_at_us) {
-                    s_press_first_us = now;
-                }
-                s_press_at_us = now;              /* (re)start the quiet time */
+            if (!s_held && !s_press_pending) {    /* while held or pending, a change is part of that press */
+                s_press_pending = true;           /* the first command that turns the group on: button_task pushes it */
             }
         } else {
             if (s_held) {
-                s_released_at_us = now;
                 s_release_by = "zigbee";          /* turned off at the touchscreen: tell the client */
                 s_release_last = "zigbee";
                 s_button_at_us = now;
             }
-            s_press_at_us = s_off_at_us = 0;      /* the Zigbee controller turned it off: nothing to push or clear */
+            s_press_pending = false;              /* the Zigbee controller turned it off: nothing to push */
             s_held = false;
-            s_held_at_us = 0;
         }
     }
     portEXIT_CRITICAL(&s_light_mux);
@@ -1882,7 +1863,7 @@ static void report_to_hub(uint16_t cluster, uint16_t attr, uint8_t type, uint16_
     ESP_LOGI(TAG, "ZB-TX report cluster=0x%04X attr=0x%04X value=%u: %d", cluster, attr, value, err);
 }
 
-/* Set the light's attributes to want[] (-1: leave), as POST /zb/light or the button's own Off asks. A
+/* Set the light's attributes to want[] (-1: leave), as the client or a role change (ROLE-OFF) asks. A
  * change of On/Off reaches the Zigbee controller as a report, as for a real bulb switched at the wall. Writes what
  * it set into msg, after "set:". Returns the length written, -1 if the stack is not up, -2 if an
  * attribute could not be set (those that were set are recorded; msg says which), -3 if need_held and no
@@ -1979,8 +1960,8 @@ static int light_apply_locked(int want[L_COUNT], const char *who, char *msg, siz
             state_mark(ST_HUB);
         }
     }
-    /* A release counts (and restarts the re-arm window) only if it ends a held press or actually turns
-     * the light off: a no-op Off must not swallow the next press. */
+    /* A release ends a held press (and one not pushed yet). It counts only if it ends a held press or
+     * actually turns the light off: a no-op Off must not swallow the next press. */
     if (release && (s_held || want[L_ON] == 0)) {
         if (s_held && s_delivering) {
             s_release_by = "api";                 /* released before the client heard of the press: follow it */
@@ -1993,10 +1974,8 @@ static int light_apply_locked(int want[L_COUNT], const char *who, char *msg, siz
             s_button_at_us = now;
             state_mark(ST_BUTTON);
         }
-        s_press_at_us = s_off_at_us = 0;          /* released: nothing left to push or clear */
+        s_press_pending = false;                  /* released: nothing left to push */
         s_held = false;
-        s_held_at_us = 0;
-        s_released_at_us = now;
     }
     portEXIT_CRITICAL(&s_light_mux);
     if (msz && n >= msz) {
@@ -2022,50 +2001,6 @@ static int light_apply(int want[L_COUNT], const char *who, char *msg, size_t msz
         log_light("LIGHT", &l);
     }
     return r;
-}
-
-/* A button Off decided before a wait may belong to a role which has since ended. Check again under
- * the Zigbee lock before touching attributes. -3 cancels it without a retry. */
-static int button_light_apply(int want[L_COUNT], const char *who, char *msg, size_t msz,
-                              bool was_held, bool *released, uint32_t generation)
-{
-    *released = false;
-    if (!s_zb_up || !esp_zigbee_lock_acquire(pdMS_TO_TICKS(1000))) {
-        return -1;
-    }
-    portENTER_CRITICAL(&s_light_mux);
-    bool active = cfg_live.role == CFG_ROLE_SHORTCUT && s_button_generation == generation;
-    if (active && was_held && s_held &&
-        (!cfg_live.off_after_s || (s_off_at_us && s_off_at_us > esp_timer_get_time()))) {
-        active = false;                           /* the live timeout was disabled or moved later */
-    }
-    portEXIT_CRITICAL(&s_light_mux);
-    if (!active) {
-        esp_zigbee_lock_release();
-        return -3;
-    }
-    light_state_t l = {.seen = 0};
-    int r = light_apply_locked(want, who, msg, msz, false, released, &l);
-    esp_zigbee_lock_release();
-    ESP_LOGI(TAG, "%s %s%s", who, msg + 4, r == -2 ? " (not all set)" : "");
-    log_light("LIGHT", &l);
-    return r;
-}
-
-/* settings.c calls this after publishing under the mux. Keep the timeout relative to the held press,
- * including a press which began with the timeout disabled. */
-void bulb_settings_changed_locked(uint32_t keys)
-{
-    if ((keys & CFG_K_OFF_AFTER_S) && s_held) {
-        s_off_at_us = cfg_live.off_after_s ? s_held_at_us + (int64_t)cfg_live.off_after_s * 1000000 : 0;
-    }
-}
-
-void bulb_settings_changed(void)
-{
-    if (s_button_task) {
-        xTaskNotifyGive(s_button_task);             /* recalculate a pending quiet time or held timeout */
-    }
 }
 
 /* A role change, from PUT /api/v1/settings; see settings.h. Today's order: the Zigbee
@@ -2113,8 +2048,7 @@ esp_err_t bulb_role_switch(const cfg_t *next, uint32_t keys)
         s_held = false;
         s_delivering = false;
         s_release_by = NULL;
-        s_press_at_us = s_press_first_us = s_released_at_us = s_off_at_us = 0;
-        s_held_at_us = 0;
+        s_press_pending = false;
         s_button_generation++;
         s_push_due_us = 0;
         cfg_publish_locked(next, keys);
@@ -2196,7 +2130,7 @@ static esp_err_t light_post(httpd_req_t *req)
         return httpd_resp_sendstr(req, "ignored: no press to release\n");
     }
     if (n == -2) {
-        if (shortcut) {                           /* the press stays held; its timeout retries */
+        if (shortcut) {                           /* the press stays held; the client calls again */
             return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Off could not be set; see /log");
         }
         n = (int)strlen(msg);                     /* as before 0.3.24: 200, with each attribute's status */
@@ -2248,7 +2182,8 @@ echo:
 
 /* POST /api/v1/button/release's core (api/v1/light.c): in the shortcut role, with a press held, the Off that
  * POST /zb/light?on=0 makes (light_apply with need_held, logged API-RELEASE; release_by "api"). BULB_CMD_*: a
- * refused or untried Off is BULB_CMD_BUSY, and the press stays held for its own timeout to retry. */
+ * refused or untried Off is BULB_CMD_BUSY (503 zigbee_busy), and the press stays held until the client calls
+ * again or the touchscreen turns the group off. */
 int bulb_button_release(char *msg, size_t msz)
 {
     bool shortcut, held;
@@ -2274,21 +2209,16 @@ int bulb_button_release(char *msg, size_t msz)
     return n < 0 ? BULB_CMD_BUSY : BULB_CMD_OK;
 }
 
-/* The shortcut button: push a press once the Zigbee controller has been quiet for settle_ms, then report Off
- * by itself if the client has not within off_after_s. A press is held from its push to its
- * release, and Zigbee controller changes meanwhile are part of it. One that starts within rearm_ms of a
- * release is a change made on the light page as it cleared: released at once,
- * not pushed. A release the client did not ask for (timeout, the Zigbee controller's Off, or the client's Off arriving before the
- * press reached it) is pushed as {"release":N,"by":"timeout"|"zigbee"|"api"}, so the client's switch follows.
+/* The shortcut button: a press is pushed at the first Zigbee controller command that turns the group on, and
+ * held until it is released: by the client (POST /api/v1/button/release) or by the touchscreen's Off. Zigbee
+ * controller changes while it is held are part of it. A release the client did not ask for (the Zigbee
+ * controller's Off, or the client's Off arriving before the press reached it) is pushed as
+ * {"release":N,"by":"zigbee"|"api"}, so the client's switch follows.
  *
  * Delivery policy (0.3.24): a release is idempotent, so a failed release push is tried twice more; a
  * press is never tried again, because a press the client did get could run the shortcut twice. A release push
- * always follows the press it releases: both are posted from this task, press first. A self-release
- * that cannot be applied (the Zigbee lock was busy, or the attribute was refused) is retried after
- * BUTTON_RETRY_US, and the client is told only once it has worked. Woken by hub_tap. 0.4.0: the task
- * exists from boot and is idle unless the role is shortcut; the three timings are settings, read live.
- * off_after_s defaults to 0 since 0.6.0: a press is held until the client releases it or the touchscreen turns
- * it off. */
+ * always follows the press it releases: both are posted from this task, press first. Woken by hub_tap only;
+ * it waits on nothing else. 0.4.0: the task exists from boot and is idle unless the role is shortcut. */
 static void button_release_push(const char *by, uint32_t press, uint32_t generation)
 {
     char buf[64];
@@ -2311,7 +2241,7 @@ static void button_release_push(const char *by, uint32_t press, uint32_t generat
 static void button_task(void *arg)
 {
     for (;;) {
-        int64_t now = esp_timer_get_time(), next = 0;
+        int64_t now = esp_timer_get_time();
         const char *by = NULL;
         portENTER_CRITICAL(&s_light_mux);
         bool active = cfg_live.role == CFG_ROLE_SHORTCUT;
@@ -2330,55 +2260,22 @@ static void button_task(void *arg)
             button_release_push(by, presses, generation);
             continue;                             /* time has passed: look again */
         }
-        portENTER_CRITICAL(&s_light_mux);
-        if (cfg_live.role != CFG_ROLE_SHORTCUT || s_button_generation != generation) {
-            portEXIT_CRITICAL(&s_light_mux);
-            continue;
-        }
-        if (s_press_at_us) {
-            next = s_press_at_us + (int64_t)cfg_live.settle_ms * 1000;
-        } else if (s_off_at_us) {
-            next = s_off_at_us;
-        }
-        portEXIT_CRITICAL(&s_light_mux);
-        if (!next) {
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-            continue;
-        }
-        if (next > now) {
-            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS((next - now) / 1000) + 1);
-            now = esp_timer_get_time();
-        }
-        bool press = false, timeout = false, late = false, was_held = false;
+        bool press = false;
         light_state_t l;
-        int64_t since = 0;
         portENTER_CRITICAL(&s_light_mux);
         if (cfg_live.role != CFG_ROLE_SHORTCUT || s_button_generation != generation) {
             portEXIT_CRITICAL(&s_light_mux);
-            continue;                             /* a role switch ended the work which waited */
+            continue;                             /* a role switch since the snapshot: look again */
         }
-        int64_t settle_us = (int64_t)cfg_live.settle_ms * 1000, rearm_us = (int64_t)cfg_live.rearm_ms * 1000,
-                off_after_us = (int64_t)cfg_live.off_after_s * 1000000;
-        if (s_press_at_us && now - s_press_at_us >= settle_us) {
-            s_press_at_us = 0;
-            since = s_press_first_us - s_released_at_us;
-            if (s_released_at_us && since < rearm_us) {
-                late = true;                      /* a change made as the last press cleared */
-            } else {
-                press = true;
-                presses = ++s_presses;
-                s_button_at_us = now;
-                state_mark(ST_BUTTON);
-                s_held = true;
-                s_held_at_us = now;
-                s_delivering = true;              /* a release from now until posted is followed by a push */
-                s_off_at_us = off_after_us ? now + off_after_us : 0;
-                l = s_hub;
-            }
-        } else if (!s_press_at_us && s_off_at_us && now >= s_off_at_us) {
-            timeout = true;
-            was_held = s_held;                    /* false: a retried late release */
-            s_off_at_us = 0;
+        if (s_press_pending) {
+            s_press_pending = false;
+            press = true;
+            presses = ++s_presses;
+            s_button_at_us = now;
+            state_mark(ST_BUTTON);
+            s_held = true;
+            s_delivering = true;                  /* a release from now until posted is followed by a push */
+            l = s_hub;
         }
         portEXIT_CRITICAL(&s_light_mux);
         if (press) {
@@ -2394,43 +2291,8 @@ static void button_task(void *arg)
                 s_delivering = false;             /* a release set meanwhile is pushed at the top of the loop */
             }
             portEXIT_CRITICAL(&s_light_mux);
-        }
-        if (late) {
-            ESP_LOGI(TAG, "BUTTON-LATE on %lld ms after the last release: not a press, releasing",
-                     since / 1000);
-        }
-        if (timeout || late) {
-            const char *who = late ? "BUTTON-LATE" : was_held ? "BUTTON-TIMEOUT" : "BUTTON-LATE (again)";
-            int want[L_COUNT];
-            for (int i = 0; i < L_COUNT; i++) {
-                want[i] = -1;
-            }
-            want[L_ON] = 0;
-            char msg[60];
-            bool released = false;
-            int r = button_light_apply(want, who, msg, sizeof msg, was_held, &released, generation);
-            if (r == -3) {
-                continue;                         /* the originating role or timeout ended */
-            }
-            if (r < 0) {
-                /* Retry only while there is still something to turn off: the press is still held, or (late)
-                 * the light is still on with no new press pending. */
-                bool armed = false;
-                portENTER_CRITICAL(&s_light_mux);
-                if (cfg_live.role != CFG_ROLE_SHORTCUT || s_button_generation != generation) {
-                    portEXIT_CRITICAL(&s_light_mux);
-                    continue;
-                }
-                bool live = was_held ? s_held : ((s_light.seen & (1u << L_ON)) && s_light.val[L_ON]);
-                if (live && (!was_held || cfg_live.off_after_s) && !s_press_at_us && !s_off_at_us) {
-                    s_off_at_us = esp_timer_get_time() + BUTTON_RETRY_US;
-                    armed = true;
-                }
-                portEXIT_CRITICAL(&s_light_mux);
-                ESP_LOGW(TAG, "%s: could not turn off%s", who, armed ? "; trying again in 5 s" : "; nothing left to do");
-            } else if (timeout && released) {
-                button_release_push("timeout", presses, generation);   /* only if this call ended the press */
-            }
+        } else {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   /* nothing to push: wait for hub_tap (a give is counted, never lost) */
         }
     }
 }
